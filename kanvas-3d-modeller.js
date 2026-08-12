@@ -617,16 +617,14 @@ function addShape(type) {
 
 // ============================================================
 // --- Klippläge: av / kantläge / rutnät ---
-// Knappen cyklar tre lägen: av, kantläge (kanter+mått, aktiveras även
-// automatiskt när ett hål väljs) och rutnät (fullt trådnät, alla kanter).
-// Alla former blir osynliga (genomskinligt material, INTE mesh.visible=false,
-// så de fortfarande går att peka på/välja) och ersätts visuellt av kantlinjer -
-// röda för hål, blåa för vanliga former - plus små måttetiketter (mm, samma
-// skala som mätbordet) på varje kant som är lång nog för att vara meningsfull.
-// Runda hål får också en punktlinje tvärs över med diameter (⌀) och radie (R),
-// eftersom deras rundade kanter annars bara ger massa små meningslösa fasettmått.
-// Tips: slå på klippläget medan du drar i kubens handtag för att se exakta mått
-// på kanterna live (samma edge-etiketter funkar på vilken form som helst).
+// Knappen cyklar tre lägen som styr HUR geometrin visas: av (vanlig, solid),
+// kantläge (bara "hårda" kanter, aktiveras även automatiskt när ett hål väljs)
+// och rutnät (fullt trådnät, alla triangelkanter). Alla former blir osynliga
+// (genomskinligt material, INTE mesh.visible=false, så de fortfarande går att
+// peka på/välja) och ersätts visuellt av kantlinjer - röda för hål, blåa för
+// vanliga former.
+// Mått är HELT separat nu (se "Mått"-knappen i vänstermenyn) - visas oavsett
+// vilket av dessa tre lägen som är aktivt, till och med med klippläge helt av.
 // Alla overlay-objekt är barn till respektive mesh så de följer automatiskt med
 // vid flytt/skala/rotera/vinkla/botten-justering. Etiketternas skärmposition och
 // text uppdateras varje bildruta i renderloopen.
@@ -678,6 +676,8 @@ function createDiameterIndicator(mesh) {
   };
 }
 
+// Klippläge = bara HUR geometrin visas (av/kanter/rutnät). Mått är ett helt
+// separat, oberoende system nedanför - se measurementOverlays.
 function enterXrayMode(mode) {
   for (const mesh of shapes) {
     mesh.updateMatrixWorld(true);
@@ -686,69 +686,33 @@ function enterXrayMode(mode) {
 
     const color = mesh.userData.isHole ? 0xff5555 : 0x66ccff;
     let lines;
-
     if (mode === 'grid') {
       // Rutnät: ALLA triangelkanter i mesh:en, inte bara de "hårda" - ger det
-      // klassiska trådnätet man ser i Blender/Maya m.fl. Ingen filtrering på
-      // vinkel som i kantläget, så runda former blir tätt rutade.
+      // klassiska trådnätet man ser i Blender/Maya m.fl.
       const wireGeo = new THREE.WireframeGeometry(mesh.geometry);
       lines = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.55 }));
     } else {
-      // Kantläge: bara rena kantlinjer nu, inga mått - måtten sitter i Rutnät istället.
       const edgesGeo = new THREE.EdgesGeometry(mesh.geometry, 25);
       lines = new THREE.LineSegments(edgesGeo, new THREE.LineBasicMaterial({ color }));
     }
     mesh.add(lines);
-
-    // Mått (kant-etiketter + ⌀/R) hör bara till Rutnät-läget. Räknas alltid ut
-    // från de "hårda" kanterna (egen EdgesGeometry, slängs direkt efter) oavsett
-    // vilken linje-geometri som faktiskt ritas - annars skulle t.ex. diagonalen
-    // i en kvadratisk sida (som Rutnät visar men kantläget aldrig gjorde) få ett
-    // eget, mindre meningsfullt mått.
-    let segments = [], diameterInfo = null;
-    if (mode === 'grid') {
-      const measureGeo = new THREE.EdgesGeometry(mesh.geometry, 25);
-      const segPos = measureGeo.attributes.position;
-      const wa = new THREE.Vector3(), wb = new THREE.Vector3();
-      for (let i = 0; i < segPos.count; i += 2) {
-        wa.fromBufferAttribute(segPos, i).applyMatrix4(mesh.matrixWorld);
-        wb.fromBufferAttribute(segPos, i + 1).applyMatrix4(mesh.matrixWorld);
-        if (wa.distanceTo(wb) < MIN_EDGE_LABEL_LENGTH) continue;
-        segments.push({
-          a: new THREE.Vector3().fromBufferAttribute(segPos, i),
-          b: new THREE.Vector3().fromBufferAttribute(segPos, i + 1),
-          el: makeLabelEl()
-        });
-      }
-      measureGeo.dispose();
-      diameterInfo = (mesh.userData.isHole && mesh.userData.holeShape === 'round') ? createDiameterIndicator(mesh) : null;
-    }
-
-    edgeOverlays.push({ mesh, lines, segments, diameterInfo });
+    edgeOverlays.push({ mesh, lines });
   }
-  updateEdgeLabels(renderer.domElement.getBoundingClientRect());
 }
 
 function exitXrayMode() {
-  for (const { mesh, lines, segments, diameterInfo } of edgeOverlays) {
+  for (const { mesh, lines } of edgeOverlays) {
     mesh.material = mesh.userData.savedMaterial;
     delete mesh.userData.savedMaterial;
     mesh.remove(lines);
     lines.geometry.dispose();
     lines.material.dispose();
-    for (const seg of segments) seg.el.remove();
-    if (diameterInfo) {
-      mesh.remove(diameterInfo.line);
-      diameterInfo.line.geometry.dispose();
-      diameterInfo.line.material.dispose();
-      diameterInfo.diaEl.remove();
-      diameterInfo.radEl.remove();
-    }
   }
   edgeOverlays = [];
 }
 
 // Projicerar en world-position till skärmen och sätter text/position/synlighet på en etikett.
+const _la = new THREE.Vector3(), _lb = new THREE.Vector3(), _lmid = new THREE.Vector3();
 function positionLabel(el, worldPoint, rect, text) {
   _lmid.copy(worldPoint).project(camera);
   if (_lmid.z < -1 || _lmid.z > 1) {
@@ -761,10 +725,56 @@ function positionLabel(el, worldPoint, rect, text) {
   el.textContent = text;
 }
 
-// Uppdaterar skärmposition + mått-text för alla etiketter. Körs varje bildruta.
-const _la = new THREE.Vector3(), _lb = new THREE.Vector3(), _lmid = new THREE.Vector3();
-function updateEdgeLabels(rect) {
-  for (const { mesh, segments, diameterInfo } of edgeOverlays) {
+// ============================================================
+// --- Mått: helt fristående på/av-läge, oberoende av klippläget ---
+// När på: mått (kant-längder + ⌀/R på runda hål) visas på ALLA former, i alla
+// klippläges-lägen (av/kant/rutnät) - och även med klippläge helt avstängt,
+// eftersom etiketterna bara är en HTML-overlay ovanpå vad som än just renderas.
+// ============================================================
+let measurementsOn = false;
+let measurementOverlays = [];
+function enterMeasurementMode() {
+  for (const mesh of shapes) {
+    mesh.updateMatrixWorld(true);
+    const measureGeo = new THREE.EdgesGeometry(mesh.geometry, 25);
+    const segPos = measureGeo.attributes.position;
+    const segments = [];
+    const wa = new THREE.Vector3(), wb = new THREE.Vector3();
+    for (let i = 0; i < segPos.count; i += 2) {
+      wa.fromBufferAttribute(segPos, i).applyMatrix4(mesh.matrixWorld);
+      wb.fromBufferAttribute(segPos, i + 1).applyMatrix4(mesh.matrixWorld);
+      if (wa.distanceTo(wb) < MIN_EDGE_LABEL_LENGTH) continue;
+      segments.push({
+        a: new THREE.Vector3().fromBufferAttribute(segPos, i),
+        b: new THREE.Vector3().fromBufferAttribute(segPos, i + 1),
+        el: makeLabelEl()
+      });
+    }
+    measureGeo.dispose();
+    const diameterInfo = (mesh.userData.isHole && mesh.userData.holeShape === 'round') ? createDiameterIndicator(mesh) : null;
+    measurementOverlays.push({ mesh, segments, diameterInfo });
+  }
+  updateMeasurementLabels(renderer.domElement.getBoundingClientRect());
+}
+function exitMeasurementMode() {
+  for (const { mesh, segments, diameterInfo } of measurementOverlays) {
+    for (const seg of segments) seg.el.remove();
+    if (diameterInfo) {
+      mesh.remove(diameterInfo.line);
+      diameterInfo.line.geometry.dispose();
+      diameterInfo.line.material.dispose();
+      diameterInfo.diaEl.remove();
+      diameterInfo.radEl.remove();
+    }
+  }
+  measurementOverlays = [];
+}
+function refreshMeasurements() {
+  exitMeasurementMode();
+  if (measurementsOn) enterMeasurementMode();
+}
+function updateMeasurementLabels(rect) {
+  for (const { mesh, segments, diameterInfo } of measurementOverlays) {
     for (const seg of segments) {
       _la.copy(seg.a).applyMatrix4(mesh.matrixWorld);
       _lb.copy(seg.b).applyMatrix4(mesh.matrixWorld);
@@ -783,9 +793,9 @@ function updateEdgeLabels(rect) {
 
 // Beslutar om klippläge ska vara på just nu och synkar overlays därefter.
 // Körs alltid (inte bara vid av/på-växling) så nytillkomna/borttagna former
-// alltid får rätt kantlinjer och etiketter. Manuellt Rutnät-läge har alltid
-// företräde; annars kantläge om det är manuellt valt ELLER ett hål är valt
-// (samma auto-trigger som förut, så mått/⌀/R fortsätter dyka upp automatiskt).
+// alltid får rätt kantlinjer. Manuellt Rutnät-läge har alltid företräde;
+// annars kantläge om det är manuellt valt ELLER ett hål är valt (auto-trigger
+// som förut - fast bara kantlinjerna, måtten styrs separat av Mått-knappen nu).
 function refreshXray() {
   exitXrayMode();
   const manualMode = XRAY_MODES[manualXrayIndex].mode;
@@ -834,6 +844,7 @@ function selectShape(mesh, hit) {
   updateCubeHandlesVisibility();
   updatePrevBox();
   refreshXray();
+  refreshMeasurements();
   updateToolbarState();
 }
 
@@ -1268,6 +1279,22 @@ const lockBtn = makeSideButton(alignRow, '🔒 Lås ihop', () => {
   }
   updateToolbarState();
 });
+// När på: joysticken lutar markerad form/hål åt vilket håll som helst istället
+// för att flytta den (riktning+magnitud på joysticken = riktning+grad på
+// lutningen). Rent på/av-läge, kräver ingen markering för att växlas.
+const angleJoyBtn = makeSideButton(alignRow, '📐 Vinkel', () => {
+  angleJoystickMode = !angleJoystickMode;
+  angleJoyBtn.textContent = angleJoystickMode ? '📐 Vinkel PÅ' : '📐 Vinkel';
+  angleJoyBtn.style.background = angleJoystickMode ? '#3a7bd5' : '#2a2a2a';
+});
+// När på: mått (kant-längder + ⌀/R) syns på ALLA former, oavsett klippläge
+// (av/kant/rutnät) - helt fristående från den knappen nu.
+const measureBtn = makeSideButton(alignRow, '📏 Mått', () => {
+  measurementsOn = !measurementsOn;
+  measureBtn.textContent = measurementsOn ? '📏 Mått PÅ' : '📏 Mått';
+  measureBtn.style.background = measurementsOn ? '#3a7bd5' : '#2a2a2a';
+  refreshMeasurements();
+});
 
 // --- Vänstermeny: Botten + Vinkel (syns bara när ett hål är valt) ---
 // Ligger till vänster istället för mitt i vyn, så den inte skymmer det du jobbar med.
@@ -1473,6 +1500,8 @@ joystickBase.addEventListener('pointercancel', endJoystick);
 joystickBase.addEventListener('pointerleave', endJoystick);
 
 const _joyForward = new THREE.Vector3(), _joyRight = new THREE.Vector3();
+const JOYSTICK_MAX_TILT = Math.PI / 2; // full utslag = 90°
+let angleJoystickMode = false;
 function applyJoystickMovement(dt) {
   if (!selected || (joystickOffset.x === 0 && joystickOffset.y === 0)) return;
   camera.getWorldDirection(_joyForward);
@@ -1480,6 +1509,28 @@ function applyJoystickMovement(dt) {
   if (_joyForward.lengthSq() < 1e-6) return;
   _joyForward.normalize();
   _joyRight.crossVectors(_joyForward, _upAxis).normalize();
+
+  if (angleJoystickMode) {
+    // Riktningen joysticken trycks åt (kamera-relativt, som vid flytt) väljer
+    // vilket HÅLL formen lutar, avståndet från mitten väljer HUR MYCKET (0 i
+    // mitten till JOYSTICK_MAX_TILT vid fullt utslag) - fritt åt alla håll,
+    // till skillnad från de 5 fasta vinkel-knapparna i vänstermenyn.
+    const mag = Math.min(1, Math.hypot(joystickOffset.x, joystickOffset.y));
+    const dirX = _joyRight.x * joystickOffset.x + _joyForward.x * -joystickOffset.y;
+    const dirZ = _joyRight.z * joystickOffset.x + _joyForward.z * -joystickOffset.y;
+    const dirLen = Math.hypot(dirX, dirZ);
+    const tiltAngle = mag * JOYSTICK_MAX_TILT;
+    const sinT = Math.sin(tiltAngle);
+    const downDir = dirLen > 1e-6
+      ? new THREE.Vector3(dirX / dirLen * sinT, -Math.cos(tiltAngle), dirZ / dirLen * sinT)
+      : new THREE.Vector3(0, -1, 0);
+    const orient = computeFaceOrientation(downDir);
+    selected.userData.spinAngle = orient.spin;
+    selected.userData.tiltAngle = orient.tilt;
+    applyOrientation(selected);
+    return;
+  }
+
   const speed = JOYSTICK_SPEEDS[joystickSpeedIndex].speed * dt;
   const dx = (_joyRight.x * joystickOffset.x + _joyForward.x * -joystickOffset.y) * speed;
   const dz = (_joyRight.z * joystickOffset.x + _joyForward.z * -joystickOffset.y) * speed;
@@ -1787,7 +1838,7 @@ function animate() {
   if (prevBox && prevSelected) prevBox.update();
   renderer.render(scene, camera);
   const rect = renderer.domElement.getBoundingClientRect();
-  if (edgeOverlays.length) updateEdgeLabels(rect);
+  if (measurementOverlays.length) updateMeasurementLabels(rect);
   updatePlacementMarkers();
   positionLabel(spawnLabelEl, SPAWN_LABEL_POS, rect, 'Nya former hamnar här');
   positionLabel(axisLabelX, AXIS_LABEL_POS_X, rect, 'X');
