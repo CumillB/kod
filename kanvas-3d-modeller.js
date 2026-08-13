@@ -765,25 +765,36 @@ function makeLabelEl() {
 const spawnLabelEl = makeLabelEl();
 const SPAWN_LABEL_POS = new THREE.Vector3(SPAWN_CENTER_X, 25, SPAWN_CENTER_Z);
 
-// Punktlinje + ⌀/R-etiketter för ett runt hål. Lokala koordinater (radie=1 i
-// enhets-geometrin) så att scale.x (=aktuell radie i mm) skalar allt automatiskt.
-function createDiameterIndicator(mesh) {
-  const y = 0.5; // toppen av enhets-cylindern
+// Punktlinje + ⌀/R-etiketter för en rund form. baseRadius = lokal radie i
+// mesh:ens EGEN geometri (1 för hål som är enhets-skalade, 15 för sfär/
+// cylinder/kon som har radien inbakad i själva geometrin) - scale.x skalar
+// sen upp/ner till den FAKTISKA aktuella radien automatiskt oavsett vilket.
+function createDiameterIndicator(mesh, baseRadius, y) {
   const geo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-1, y, 0),
-    new THREE.Vector3(1, y, 0)
+    new THREE.Vector3(-baseRadius, y, 0),
+    new THREE.Vector3(baseRadius, y, 0)
   ]);
-  const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.03, gapSize: 0.05 }));
+  const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: baseRadius * 0.03, gapSize: baseRadius * 0.05 }));
   line.computeLineDistances();
   mesh.add(line);
   return {
     line,
-    diaPoint: new THREE.Vector3(1.2, y, 0),
-    radPoint: new THREE.Vector3(0.5, y, 0),
+    baseRadius,
+    diaPoint: new THREE.Vector3(baseRadius * 1.2, y, 0),
+    radPoint: new THREE.Vector3(baseRadius * 0.5, y, 0),
     diaEl: makeLabelEl(),
     radEl: makeLabelEl()
   };
 }
+// Vilka rundade FORMTYPER (utöver runda hål) som får ⌀/R - med lokal
+// bas-radie och lämplig Y-höjd i just DERAS geometri (konens bas t.ex.
+// ligger vid lokal -halva höjden, inte mitten, eftersom spetsen pekar upp).
+const ROUND_SHAPE_INFO = {
+  sphere: { r: 15, y: 0 },
+  cylinder: { r: 15, y: 15 },
+  cone: { r: 15, y: -15 },
+  torus: { r: 15, y: 0 }
+};
 
 // Klippläge = bara HUR geometrin visas (av/kanter/rutnät). Mått är ett helt
 // separat, oberoende system nedanför - se measurementOverlays.
@@ -860,7 +871,13 @@ function enterMeasurementMode() {
       });
     }
     measureGeo.dispose();
-    const diameterInfo = (mesh.userData.isHole && mesh.userData.holeShape === 'round') ? createDiameterIndicator(mesh) : null;
+    let diameterInfo = null;
+    if (mesh.userData.isHole && mesh.userData.holeShape === 'round') {
+      diameterInfo = createDiameterIndicator(mesh, 1, 0.5);
+    } else if (!mesh.userData.isHole && ROUND_SHAPE_INFO[mesh.userData.shapeType]) {
+      const info = ROUND_SHAPE_INFO[mesh.userData.shapeType];
+      diameterInfo = createDiameterIndicator(mesh, info.r, info.y);
+    }
     measurementOverlays.push({ mesh, segments, diameterInfo });
   }
   updateMeasurementLabels(renderer.domElement.getBoundingClientRect());
@@ -891,7 +908,7 @@ function updateMeasurementLabels(rect) {
       positionLabel(seg.el, _la.add(_lb).multiplyScalar(0.5), rect, Math.round(length) + 'mm');
     }
     if (diameterInfo) {
-      const radius = mesh.scale.x;
+      const radius = diameterInfo.baseRadius * mesh.scale.x;
       _la.copy(diameterInfo.diaPoint).applyMatrix4(mesh.matrixWorld);
       positionLabel(diameterInfo.diaEl, _la, rect, `⌀${Math.round(radius * 2)}mm`);
       _lb.copy(diameterInfo.radPoint).applyMatrix4(mesh.matrixWorld);
