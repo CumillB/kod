@@ -431,6 +431,62 @@ function placeOnFace(mesh, facePoint, downDir) {
   mesh.position.copy(facePoint).sub(localOffset);
 }
 
+// Vänder VALT OBJEKT (inte hål - de har redan Vinkel/joystick för det) 90° så
+// det vilar på sidan i angiven kamera-relativ riktning (rightAmt/forwardAmt är
+// +1/0/-1 och kombineras precis som joystickens rörelse-riktning). Trycker man
+// samma pil igen medan formen redan står så, går den tillbaka till rak. Efter
+// vändningen mäts formens FAKTISKA bounding box så den hamnar kvar på bädden -
+// funkar oavsett form eller om den fått olika bredd/höjd/längd via handtagen.
+// Ihoplåsta gruppmedlemmar (objekt OCH hål) vänds och flyttas med som EN stel
+// enhet: kretsar runt pivotens (formens) position, får samma vertikala
+// bädd-justering, och räknar om sin EGEN spinn/vinkel utifrån samma delta-
+// rotation - inte bara en direkt kopia - så deras orientering blir konsekvent
+// med resten av verktygets spinn+vinkel-system även efteråt.
+function flipObjectToSide(rightAmt, forwardAmt) {
+  if (!selected || selected.userData.isHole) return;
+  const camF = new THREE.Vector3();
+  camera.getWorldDirection(camF);
+  camF.y = 0;
+  if (camF.lengthSq() < 1e-6) return;
+  camF.normalize();
+  const camR = new THREE.Vector3().crossVectors(camF, _upAxis).normalize();
+  const downDir = new THREE.Vector3(
+    camR.x * rightAmt + camF.x * forwardAmt, 0,
+    camR.z * rightAmt + camF.z * forwardAmt
+  ).normalize();
+  const orient = computeFaceOrientation(downDir);
+  const curSpin = selected.userData.spinAngle || 0;
+  const curTilt = selected.userData.tiltAngle || 0;
+  const already = Math.abs(curSpin - orient.spin) < 0.01 && Math.abs(curTilt - orient.tilt) < 0.01;
+
+  const oldQuat = selected.quaternion.clone();
+  const oldPos = selected.position.clone();
+
+  selected.userData.spinAngle = already ? 0 : orient.spin;
+  selected.userData.tiltAngle = already ? 0 : orient.tilt;
+  applyOrientation(selected);
+  const box = new THREE.Box3().setFromObject(selected);
+  const dy = -box.min.y;
+  selected.position.y += dy;
+
+  if (selected.userData.groupId) {
+    const deltaQuat = selected.quaternion.clone().multiply(oldQuat.clone().invert());
+    const relPos = new THREE.Vector3(), downVec = new THREE.Vector3();
+    for (const m of shapes) {
+      if (m === selected || m.userData.groupId !== selected.userData.groupId) continue;
+      relPos.copy(m.position).sub(oldPos).applyQuaternion(deltaQuat);
+      m.position.copy(oldPos).add(relPos);
+      m.position.y += dy;
+
+      downVec.set(0, -1, 0).applyQuaternion(m.quaternion).applyQuaternion(deltaQuat);
+      const memberOrient = computeFaceOrientation(downVec);
+      m.userData.spinAngle = memberOrient.spin;
+      m.userData.tiltAngle = memberOrient.tilt;
+      applyOrientation(m);
+    }
+  }
+}
+
 // --- Hål: botten-kontroll ---
 // Toppen på ett hål ligger fast på HOLE_TOP (gott om marginal över normalstora former).
 // "Botten" är det enda du justerar: 0 = går hela vägen ner till bädden (genomgående hål),
@@ -568,10 +624,18 @@ function updatePlacementMarkers() {
     const bottomClearance = Math.max(8, Math.round(wrapperRect.bottom - hintTop) + 6);
     joystickBase.style.bottom = bottomClearance + 'px';
     speedBtn.style.bottom = bottomClearance + 'px';
+    joystickBaseLeft.style.display = 'block';
+    joystickBaseLeft.style.bottom = bottomClearance + 'px';
+    // sidePanel (vänster) ligger ovanför denna nya vänster-joystick nu istället
+    // för ett fast avstånd från botten - annars hade de kunnat hamna på varandra
+    // när ett hål är valt (då syns båda samtidigt).
+    sidePanel.style.bottom = Math.round(bottomClearance + JOYSTICK_SIZE + 8) + 'px';
+    dpadPanel.style.bottom = sidePanel.style.bottom;
   } else {
     coordBox.style.display = 'none';
     joystickBase.style.display = 'none';
     speedBtn.style.display = 'none';
+    joystickBaseLeft.style.display = 'none';
   }
 }
 
@@ -879,22 +943,17 @@ function forgetIfPrevious(mesh) {
   }
 }
 
-// --- Låsa former ihop (flyttas som en enhet) ---
-// Varje form har en userData.groupId (null = olåst). Att låsa A+B ihop ger dem
-// samma id - om någon redan tillhör en grupp går ALLA i den gruppen med i den
-// gemensamma. Funkar identiskt för objekt och hål. Bara FLYTT (drag/joystick)
-// följer låsningen, inte skala/rotera/botten - se applyGroupDelta.
+// --- Låsa former ihop (flyttas/vinklas/vänds som en enhet) ---
+// Varje form har en userData.groupId (null = olåst). Ett tryck på låsknappen
+// låser ALLA nuvarande former till samma grupp-id, exakt där de redan står -
+// ingen markering krävs. Funkar identiskt för objekt och hål. Flytt (drag/
+// joystick, båda axlarna) och vändning (D-pad) följer låsningen som en enhet;
+// skala/rotera/botten gör det INTE (se applyGroupDelta och flipObjectToSide).
 let nextGroupId = 1;
-function lockTogether(a, b) {
-  const gidA = a.userData.groupId, gidB = b.userData.groupId;
-  if (gidA && gidB) {
-    if (gidA === gidB) return;
-    for (const m of shapes) if (m.userData.groupId === gidB) m.userData.groupId = gidA;
-  } else {
-    const gid = gidA || gidB || ('g' + nextGroupId++);
-    a.userData.groupId = gid;
-    b.userData.groupId = gid;
-  }
+function lockAllTogether() {
+  if (shapes.length < 2) return;
+  const gid = 'g' + nextGroupId++;
+  for (const m of shapes) m.userData.groupId = gid;
 }
 function unlockSelected() {
   if (!selected || !selected.userData.groupId) return;
@@ -905,11 +964,12 @@ function unlockSelected() {
 }
 // Flyttar alla ÖVRIGA medlemmar i mesh:ens grupp med samma delta som mesh:en
 // själv precis flyttades. Anropas efter att mesh.position redan uppdaterats.
-function applyGroupDelta(mesh, dx, dz) {
+function applyGroupDelta(mesh, dx, dy, dz) {
   if (!mesh.userData.groupId) return;
   for (const m of shapes) {
     if (m !== mesh && m.userData.groupId === mesh.userData.groupId) {
       m.position.x += dx;
+      m.position.y += dy;
       m.position.z += dz;
     }
   }
@@ -1267,15 +1327,14 @@ const surfaceBtn = makeSideButton(alignRow, '⊞ På yta', () => {
 // resten av gruppen ihop). Annars, om två giltiga former är markerade - lås
 // ihop dem. Flytt (drag/joystick) på VILKEN medlem som helst rör hela gruppen.
 const lockBtn = makeSideButton(alignRow, '🔒 Lås ihop', () => {
-  if (!selected) return;
-  if (selected.userData.groupId) {
+  if (selected && selected.userData.groupId) {
     unlockSelected();
   } else {
-    if (!prevSelected || prevSelected === selected || !shapes.includes(prevSelected)) {
-      flashButton(lockBtn, 'Markera 2 former först');
+    if (shapes.length < 2) {
+      flashButton(lockBtn, 'Inget att låsa');
       return;
     }
-    lockTogether(selected, prevSelected);
+    lockAllTogether();
   }
   updateToolbarState();
 });
@@ -1306,6 +1365,33 @@ sidePanel.style.cssText = `
   font-family: system-ui, sans-serif; z-index: 10;
 `;
 wrapper.appendChild(sidePanel);
+
+// D-pad (vänd valt OBJEKT 90° åt pilens håll) - upptar samma plats/mått som
+// sidePanel ovan. Krockar aldrig: en vald form är antingen ett hål (då syns
+// sidePanel) eller ett objekt (då syns D-pad:en istället), aldrig båda.
+const dpadPanel = document.createElement('div');
+dpadPanel.style.cssText = `
+  position: absolute; left: ${px(8)}; width: ${px(96)}; height: ${px(96)};
+  display: none; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+  gap: ${px(4)}; z-index: 10;
+`;
+wrapper.appendChild(dpadPanel);
+function makeDpadButton(label, col, row, onClick) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.style.cssText = `
+    grid-column: ${col}; grid-row: ${row};
+    border-radius: ${px(8)}; border: 1px solid #555;
+    background: rgba(0,0,0,0.55); color: #fff; font-size: ${px(16)}; touch-action: manipulation;
+  `;
+  b.addEventListener('click', onClick);
+  dpadPanel.appendChild(b);
+  return b;
+}
+makeDpadButton('↑', 2, 1, () => flipObjectToSide(0, 1));
+makeDpadButton('←', 1, 2, () => flipObjectToSide(-1, 0));
+makeDpadButton('→', 3, 2, () => flipObjectToSide(1, 0));
+makeDpadButton('↓', 2, 3, () => flipObjectToSide(0, -1));
 
 function sideTitle(text) {
   const t = document.createElement('div');
@@ -1499,11 +1585,79 @@ joystickBase.addEventListener('pointerup', endJoystick);
 joystickBase.addEventListener('pointercancel', endJoystick);
 joystickBase.addEventListener('pointerleave', endJoystick);
 
+// --- Vertikal joystick (vänster sida) - flyttar vald form/hål upp och ner ---
+// Samma plats-mönster som höger (botten-förankrad, se updatePlacementMarkers),
+// men handtaget kan bara röra sig VERTIKALT inom basen - en visuell påminnelse
+// om att bara höjdriktningen gör något här. Grön handtagsfärg matchar Y-axelns
+// färg (origo-gizmot, X/Y/Z-etiketterna) i resten av verktyget. Delar samma
+// hastighetsinställning (🐢/Normal/⚡) som höger joystick.
+const joystickBaseLeft = document.createElement('div');
+joystickBaseLeft.style.cssText = `
+  position: absolute; left: ${px(8)}; width: ${JOYSTICK_SIZE}px; height: ${JOYSTICK_SIZE}px;
+  border-radius: 50%; background: rgba(255,255,255,0.08); border: 1px solid #555;
+  display: none; z-index: 10; touch-action: none;
+`;
+wrapper.appendChild(joystickBaseLeft);
+const joystickHandleLeft = document.createElement('div');
+joystickHandleLeft.style.cssText = `
+  position: absolute; left: ${JOYSTICK_CENTER}px; top: ${JOYSTICK_CENTER}px;
+  width: ${JOYSTICK_HANDLE}px; height: ${JOYSTICK_HANDLE}px;
+  margin-left: ${-JOYSTICK_HANDLE / 2}px; margin-top: ${-JOYSTICK_HANDLE / 2}px;
+  border-radius: 50%; background: #3a9a3a; border: 1px solid #fff;
+  touch-action: none;
+`;
+joystickBaseLeft.appendChild(joystickHandleLeft);
+
+let joystickOffsetY = 0; // -1..1, andel av radien
+let joystickPointerIdLeft = null;
+function joystickResetLeft() {
+  joystickOffsetY = 0;
+  joystickHandleLeft.style.top = JOYSTICK_CENTER + 'px';
+}
+function updateJoystickFromEventLeft(e) {
+  const rect = joystickBaseLeft.getBoundingClientRect();
+  const cy = rect.top + rect.height / 2;
+  const dy = Math.max(-JOYSTICK_RADIUS, Math.min(JOYSTICK_RADIUS, e.clientY - cy));
+  joystickOffsetY = dy / JOYSTICK_RADIUS;
+  joystickHandleLeft.style.top = (JOYSTICK_CENTER + dy) + 'px';
+}
+joystickBaseLeft.addEventListener('pointerdown', (e) => {
+  if (!selected) return;
+  e.preventDefault();
+  e.stopPropagation();
+  joystickPointerIdLeft = e.pointerId;
+  joystickBaseLeft.setPointerCapture(e.pointerId);
+  updateJoystickFromEventLeft(e);
+});
+joystickBaseLeft.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== joystickPointerIdLeft) return;
+  e.preventDefault();
+  updateJoystickFromEventLeft(e);
+});
+function endJoystickLeft(e) {
+  if (e.pointerId !== joystickPointerIdLeft) return;
+  joystickPointerIdLeft = null;
+  joystickResetLeft();
+}
+joystickBaseLeft.addEventListener('pointerup', endJoystickLeft);
+joystickBaseLeft.addEventListener('pointercancel', endJoystickLeft);
+joystickBaseLeft.addEventListener('pointerleave', endJoystickLeft);
+
 const _joyForward = new THREE.Vector3(), _joyRight = new THREE.Vector3();
 const JOYSTICK_MAX_TILT = Math.PI / 2; // full utslag = 90°
 let angleJoystickMode = false;
 function applyJoystickMovement(dt) {
-  if (!selected || (joystickOffset.x === 0 && joystickOffset.y === 0)) return;
+  if (!selected) return;
+  const speed = JOYSTICK_SPEEDS[joystickSpeedIndex].speed * dt;
+
+  // Vänster joystick: höjd (upp/ner), oberoende av vad höger joystick gör.
+  if (joystickOffsetY !== 0) {
+    const dy = -joystickOffsetY * speed;
+    selected.position.y += dy;
+    applyGroupDelta(selected, 0, dy, 0);
+  }
+
+  if (joystickOffset.x === 0 && joystickOffset.y === 0) return;
   camera.getWorldDirection(_joyForward);
   _joyForward.y = 0;
   if (_joyForward.lengthSq() < 1e-6) return;
@@ -1531,12 +1685,11 @@ function applyJoystickMovement(dt) {
     return;
   }
 
-  const speed = JOYSTICK_SPEEDS[joystickSpeedIndex].speed * dt;
   const dx = (_joyRight.x * joystickOffset.x + _joyForward.x * -joystickOffset.y) * speed;
   const dz = (_joyRight.z * joystickOffset.x + _joyForward.z * -joystickOffset.y) * speed;
   selected.position.x += dx;
   selected.position.z += dz;
-  applyGroupDelta(selected, dx, dz);
+  applyGroupDelta(selected, dx, 0, dz);
 }
 
 // Toolbaren kan radbryta olika många rader beroende på skärmbredd. Håll koll på dess
@@ -1571,15 +1724,17 @@ function updateToolbarState() {
   surfaceBtn.style.opacity = (canAlign && prevSelectedFace) ? '1' : '0.4';
   const selectedLocked = !!(selected && selected.userData.groupId);
   lockBtn.textContent = selectedLocked ? '🔓 Lås upp' : '🔒 Lås ihop';
-  lockBtn.style.opacity = (selectedLocked || canAlign) ? '1' : '0.4';
+  lockBtn.style.opacity = (selectedLocked || shapes.length >= 2) ? '1' : '0.4';
 
-  // sidePanel ska alltid hamna precis under alignRow. Mäter dess FAKTISKA höjd
-  // just nu (alignRow kan variera i höjd) istället för att gissa ett fast
-  // pixelvärde - samma "mät, gissa inte"-princip som fixade koordinat-rutan
-  // och joysticken tidigare.
+  // sidePanel/dpadPanel ska alltid hamna precis under alignRow. Mäter dess
+  // FAKTISKA höjd just nu (alignRow kan variera i höjd) istället för att
+  // gissa ett fast pixelvärde - samma "mät, gissa inte"-princip som fixade
+  // koordinat-rutan och joysticken tidigare.
   const wrapperTop = wrapper.getBoundingClientRect().top;
   const alignBottom = selected ? alignRow.getBoundingClientRect().bottom : toolbar.getBoundingClientRect().bottom;
-  sidePanel.style.top = Math.round(alignBottom - wrapperTop + 8) + 'px';
+  const panelTop = Math.round(alignBottom - wrapperTop + 8) + 'px';
+  sidePanel.style.top = panelTop;
+  dpadPanel.style.top = panelTop;
 
   const showHolePanels = !!(selected && selected.userData.isHole);
   sidePanel.style.display = showHolePanels ? 'flex' : 'none';
@@ -1591,6 +1746,7 @@ function updateToolbarState() {
       btn.style.background = (deg === currentDeg) ? '#3a7bd5' : '#2a2a2a';
     }
   }
+  dpadPanel.style.display = (selected && !selected.userData.isHole) ? 'grid' : 'none';
 }
 updateToolbarState();
 
@@ -1732,7 +1888,7 @@ function onPointerMove(e) {
     const dz = newZ - selected.position.z;
     selected.position.x = newX;
     selected.position.z = newZ;
-    applyGroupDelta(selected, dx, dz);
+    applyGroupDelta(selected, dx, 0, dz);
   } else if (mode === 'orbit' && pointers.size === 1) {
     const dx = e.clientX - lastSingle.x;
     const dy = e.clientY - lastSingle.y;
