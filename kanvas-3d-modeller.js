@@ -682,6 +682,15 @@ function updatePlacementMarkers() {
     speedBtn.style.display = 'none';
     joystickBaseLeft.style.display = 'none';
   }
+
+  // Kamera-joysticken är alltid synlig (orbit behövs oavsett markering), så
+  // dess topp mäts oberoende av om koordinat-rutan råkar synas just nu eller
+  // inte - annars precis under toolbaren istället.
+  const wrapperTop2 = wrapper.getBoundingClientRect().top;
+  const orbitRefBottom = coordBox.style.display !== 'none'
+    ? coordBox.getBoundingClientRect().bottom
+    : toolbar.getBoundingClientRect().bottom;
+  orbitJoystickBase.style.top = Math.round(orbitRefBottom - wrapperTop2 + 8) + 'px';
 }
 
 function addShape(type) {
@@ -1668,6 +1677,81 @@ joystickBase.addEventListener('pointerup', endJoystick);
 joystickBase.addEventListener('pointercancel', endJoystick);
 joystickBase.addEventListener('pointerleave', endJoystick);
 
+// --- Kamera-joystick (mellan koordinat-rutan och höger joystick) ---
+// Styr kameravinkeln (orbit) kontinuerligt medan du håller ute den - samma
+// riktning/känsla som att dra med fingret på tomt utrymme. Alltid synlig
+// (orbit är relevant även utan markering, till skillnad från de andra två
+// joystickarna) - vitgrå handtagsfärg för att skilja den från de axel-
+// färgade rörelse-joystickarna.
+const ORBIT_SPEED = 1.8; // radianer/sekund vid fullt utslag
+const orbitJoystickBase = document.createElement('div');
+orbitJoystickBase.style.cssText = `
+  position: absolute; right: ${px(8)}; width: ${JOYSTICK_SIZE}px; height: ${JOYSTICK_SIZE}px;
+  border-radius: 50%; background: rgba(255,255,255,0.08); border: 1px solid #555;
+  z-index: 10; touch-action: none;
+`;
+wrapper.appendChild(orbitJoystickBase);
+const orbitJoystickHandle = document.createElement('div');
+orbitJoystickHandle.style.cssText = `
+  position: absolute; left: ${JOYSTICK_CENTER}px; top: ${JOYSTICK_CENTER}px;
+  width: ${JOYSTICK_HANDLE}px; height: ${JOYSTICK_HANDLE}px;
+  margin-left: ${-JOYSTICK_HANDLE / 2}px; margin-top: ${-JOYSTICK_HANDLE / 2}px;
+  border-radius: 50%; background: #cccccc; border: 1px solid #fff;
+  touch-action: none;
+`;
+orbitJoystickBase.appendChild(orbitJoystickHandle);
+
+const orbitOffset = { x: 0, y: 0 }; // -1..1
+let orbitPointerId = null;
+function orbitJoystickReset() {
+  orbitOffset.x = 0;
+  orbitOffset.y = 0;
+  orbitJoystickHandle.style.left = JOYSTICK_CENTER + 'px';
+  orbitJoystickHandle.style.top = JOYSTICK_CENTER + 'px';
+}
+function updateOrbitJoystickFromEvent(e) {
+  const rect = orbitJoystickBase.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  let dx = e.clientX - cx;
+  let dy = e.clientY - cy;
+  const dist = Math.hypot(dx, dy);
+  if (dist > JOYSTICK_RADIUS) {
+    dx = dx / dist * JOYSTICK_RADIUS;
+    dy = dy / dist * JOYSTICK_RADIUS;
+  }
+  orbitOffset.x = dx / JOYSTICK_RADIUS;
+  orbitOffset.y = dy / JOYSTICK_RADIUS;
+  orbitJoystickHandle.style.left = (JOYSTICK_CENTER + dx) + 'px';
+  orbitJoystickHandle.style.top = (JOYSTICK_CENTER + dy) + 'px';
+}
+orbitJoystickBase.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  orbitPointerId = e.pointerId;
+  orbitJoystickBase.setPointerCapture(e.pointerId);
+  updateOrbitJoystickFromEvent(e);
+});
+orbitJoystickBase.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== orbitPointerId) return;
+  e.preventDefault();
+  updateOrbitJoystickFromEvent(e);
+});
+function endOrbitJoystick(e) {
+  if (e.pointerId !== orbitPointerId) return;
+  orbitPointerId = null;
+  orbitJoystickReset();
+}
+orbitJoystickBase.addEventListener('pointerup', endOrbitJoystick);
+orbitJoystickBase.addEventListener('pointercancel', endOrbitJoystick);
+orbitJoystickBase.addEventListener('pointerleave', endOrbitJoystick);
+function applyOrbitJoystick(dt) {
+  if (orbitOffset.x === 0 && orbitOffset.y === 0) return;
+  camTheta -= orbitOffset.x * ORBIT_SPEED * dt;
+  camPhi -= orbitOffset.y * ORBIT_SPEED * dt;
+  updateCamera();
+}
+
 // --- Vertikal joystick (vänster sida) - flyttar vald form/hål upp och ner ---
 // Samma plats-mönster som höger (botten-förankrad, se updatePlacementMarkers),
 // men handtaget kan bara röra sig VERTIKALT inom basen - en visuell påminnelse
@@ -2081,6 +2165,7 @@ function animate() {
   lastFrameTime = now;
 
   applyJoystickMovement(dt);
+  applyOrbitJoystick(dt);
   if (selectionBox && selected) selectionBox.update();
   if (prevBox && prevSelected) prevBox.update();
   renderer.render(scene, camera);
