@@ -649,6 +649,14 @@ function updatePlacementMarkers() {
     }
   }
   updateCubeHandles();
+
+  // Botten-avståndet (mot hint-textens faktiska topp) behövs oavsett om något
+  // är valt just nu, eftersom kamera-joysticken alltid är synlig och förankras
+  // mot samma mått - beräknas därför en gång här, utanför den villkorliga delen.
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const hintTop = hint.getBoundingClientRect().top;
+  const bottomClearance = Math.max(8, Math.round(wrapperRect.bottom - hintTop) + 6);
+
   if (selected && selected.userData.placementMarker) {
     const p = selected.userData.placementMarker.dot.position;
     coordBox.style.display = 'flex';
@@ -660,13 +668,9 @@ function updatePlacementMarkers() {
     coordQuadEl.textContent = `Kvadrant ${quadrantOf(p.x, p.z)}`;
     joystickBase.style.display = 'block';
     speedBtn.style.display = 'block';
-    const wrapperRect = wrapper.getBoundingClientRect();
     // Joystick + hastighetsknapp botten-förankras (sida vid sida) istället för att
     // staplas uppifrån - annars blev det för högt i liggande läge och knappen
-    // hamnade utanför skärmen. Avståndet från botten mäts mot hint-textens
-    // faktiska topp, så de aldrig hamnar ovanpå den.
-    const hintTop = hint.getBoundingClientRect().top;
-    const bottomClearance = Math.max(8, Math.round(wrapperRect.bottom - hintTop) + 6);
+    // hamnade utanför skärmen.
     joystickBase.style.bottom = bottomClearance + 'px';
     speedBtn.style.bottom = bottomClearance + 'px';
     joystickBaseLeft.style.display = 'block';
@@ -683,14 +687,11 @@ function updatePlacementMarkers() {
     joystickBaseLeft.style.display = 'none';
   }
 
-  // Kamera-joysticken är alltid synlig (orbit behövs oavsett markering), så
-  // dess topp mäts oberoende av om koordinat-rutan råkar synas just nu eller
-  // inte - annars precis under toolbaren istället.
-  const wrapperTop2 = wrapper.getBoundingClientRect().top;
-  const orbitRefBottom = coordBox.style.display !== 'none'
-    ? coordBox.getBoundingClientRect().bottom
-    : toolbar.getBoundingClientRect().bottom;
-  orbitJoystickBase.style.top = Math.round(orbitRefBottom - wrapperTop2 + 8) + 'px';
+  // Kamera-joysticken förankras nu mot SAMMA botten-mått som rörelsejoysticken
+  // (bottom = bottomClearance + JOYSTICK_SIZE + en liten marginal) istället för
+  // mot koordinat-rutans topp - hamnar då alltid precis ovanför rörelsejoysticken,
+  // oavsett hur mycket ledigt utrymme som råkar finnas ovanför den.
+  orbitJoystickBase.style.bottom = Math.round(bottomClearance + JOYSTICK_SIZE + 8) + 'px';
 }
 
 function addShape(type) {
