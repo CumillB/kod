@@ -379,10 +379,13 @@ let prevSelectedFace = null;   // yta som hörde till FÖREGÅENDE markering (pr
 
 function makeMaterial() {
   const color = new THREE.Color().setHSL(Math.random(), 0.55, 0.55);
-  return new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.15 });
+  // DoubleSide: en skuren hålighets innervägg kan annars bli osynlig i vanliga
+  // läget om normalens riktning där råkar peka "fel" väg för vanlig baksides-
+  // kulling - med DoubleSide renderas ytan oavsett normalriktning.
+  return new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.15, side: THREE.DoubleSide });
 }
 function makeHoleMaterial() {
-  return new THREE.MeshStandardMaterial({ color: 0xff5555, transparent: true, opacity: 0.5, roughness: 0.4 });
+  return new THREE.MeshStandardMaterial({ color: 0xff5555, transparent: true, opacity: 0.5, roughness: 0.4, side: THREE.DoubleSide });
 }
 
 // --- Orientering: spinn (Y, fri via nyp) + vinkel (X, förvalda knappar) ---
@@ -484,6 +487,48 @@ function flipObjectToSide(rightAmt, forwardAmt) {
       m.userData.tiltAngle = memberOrient.tilt;
       applyOrientation(m);
     }
+  }
+}
+
+// Dit alla fyra D-pad-tryckningar går. Läge 0 (förvalt): vänd OBJEKTET på
+// sidan (bara objekt, inte hål - de har redan Vinkel/joystick för lutning).
+// Läge 1/2 fungerar på BÅDE objekt och hål, men betyder olika saker:
+//  Objekt: läge 1 = bredd(vä/hö)+höjd(upp/ner), läge 2 = djup(upp/ner)
+//  Hål: läge 1 = radie(vä/hö)+botten(upp/ner), läge 2 = botten(upp/ner)
+//  (hål har bara två meningsfulla mått - radie och djup/botten - så "höjd"
+//  och "djup" pekar båda på botten för hål, medan vä/hö bara gör nåt i läge 1)
+const DPAD_RESIZE_STEP = 0.1; // andel av bas-storleken per tryck, objekt
+const HOLE_RADIUS_STEP = 1;   // mm per tryck, hål
+function dpadPress(rightAmt, forwardAmt) {
+  if (dpadResizeMode === 0) {
+    flipObjectToSide(rightAmt, forwardAmt);
+    return;
+  }
+  if (!selected) return;
+
+  if (selected.userData.isHole) {
+    if (dpadResizeMode === 1 && rightAmt !== 0) {
+      const r = Math.max(2, Math.min(50, selected.scale.x + rightAmt * HOLE_RADIUS_STEP));
+      selected.scale.x = r;
+      selected.scale.z = r;
+    }
+    if (forwardAmt !== 0) {
+      setHoleBottom(selected, selected.userData.holeBottom + forwardAmt * HOLE_BOTTOM_STEP);
+      updateToolbarState();
+    }
+    return;
+  }
+
+  if (dpadResizeMode === 1) {
+    if (rightAmt !== 0) {
+      selected.scale.x = Math.max(0.1, Math.min(8, selected.scale.x + rightAmt * DPAD_RESIZE_STEP));
+    }
+    if (forwardAmt !== 0) {
+      selected.scale.y = Math.max(0.1, Math.min(8, selected.scale.y + forwardAmt * DPAD_RESIZE_STEP));
+      selected.position.y = selected.userData.restHeight * selected.scale.y;
+    }
+  } else if (forwardAmt !== 0) {
+    selected.scale.z = Math.max(0.1, Math.min(8, selected.scale.z + forwardAmt * DPAD_RESIZE_STEP));
   }
 }
 
@@ -1388,10 +1433,10 @@ function makeDpadButton(label, col, row, onClick) {
   dpadPanel.appendChild(b);
   return b;
 }
-makeDpadButton('↑', 2, 1, () => flipObjectToSide(0, 1));
-makeDpadButton('←', 1, 2, () => flipObjectToSide(-1, 0));
-makeDpadButton('→', 3, 2, () => flipObjectToSide(1, 0));
-makeDpadButton('↓', 2, 3, () => flipObjectToSide(0, -1));
+makeDpadButton('↑', 2, 1, () => dpadPress(0, 1));
+makeDpadButton('←', 1, 2, () => dpadPress(-1, 0));
+makeDpadButton('→', 3, 2, () => dpadPress(1, 0));
+makeDpadButton('↓', 2, 3, () => dpadPress(0, -1));
 
 function sideTitle(text) {
   const t = document.createElement('div');
@@ -1485,6 +1530,27 @@ function quadrantOf(x, z) {
   if (x >= 0) return z >= 0 ? 1 : 4;
   return z >= 0 ? 2 : 3;
 }
+
+// Cyklar vad D-pad-pilarna (↑↓←→) gör: 0 = vänd objektet på sidan (som förut),
+// 1 = bredd (vänster/höger) + höjd (upp/ner), 2 = djup (upp/ner). Ryms inte fyra
+// oberoende mått på fyra pilar samtidigt, så bredd/höjd delar ett läge och djup
+// får ett eget - växla med samma knapp.
+const DPAD_MODES = ['↕ D-pad: Vänd', '↕ D-pad: Bredd/Höjd', '↕ D-pad: Djup'];
+let dpadResizeMode = 0;
+const dpadModeBtn = document.createElement('button');
+dpadModeBtn.style.cssText = `
+  width: 100%; margin-top: ${px(4)}; padding: ${px(3)} ${px(4)}; min-height: ${px(22)};
+  border-radius: ${px(6)}; border: 1px solid #555; background: #2a2a2a;
+  color: #ccc; font-size: ${px(10)}; touch-action: manipulation; font-family: system-ui, sans-serif;
+`;
+dpadModeBtn.textContent = DPAD_MODES[0];
+dpadModeBtn.addEventListener('click', () => {
+  dpadResizeMode = (dpadResizeMode + 1) % DPAD_MODES.length;
+  dpadModeBtn.textContent = DPAD_MODES[dpadResizeMode];
+  dpadModeBtn.style.background = dpadResizeMode === 0 ? '#2a2a2a' : '#3a7bd5';
+  updateToolbarState();
+});
+coordBox.appendChild(dpadModeBtn);
 
 // --- Joystick (höger sida, under koordinat-rutan) ---
 // Finjusterar X/Z-positionen för vald form. Dra handtaget bort från mitten och
@@ -1736,9 +1802,17 @@ function updateToolbarState() {
   sidePanel.style.top = panelTop;
   dpadPanel.style.top = panelTop;
 
-  const showHolePanels = !!(selected && selected.userData.isHole);
-  sidePanel.style.display = showHolePanels ? 'flex' : 'none';
-  if (showHolePanels) {
+  // sidePanel (Botten/Vinkel) och dpadPanel delar samma yta och får ALDRIG
+  // synas samtidigt. Ett hål visar normalt sidePanel - men om D-pad:ens
+  // storleks-läge (radie/botten) är påslaget behövs D-pad:en synlig istället,
+  // så då viker sidePanel undan tillfälligt.
+  const holeSel = !!(selected && selected.userData.isHole);
+  const solidSel = !!(selected && !selected.userData.isHole);
+  const showSidePanel = holeSel && dpadResizeMode === 0;
+  const showDpad = solidSel || (holeSel && dpadResizeMode !== 0);
+
+  sidePanel.style.display = showSidePanel ? 'flex' : 'none';
+  if (showSidePanel) {
     const b = selected.userData.holeBottom;
     bottomLabel.textContent = b <= HOLE_BOTTOM_MIN + 0.01 ? 'Genomgående' : `${b}mm`;
     const currentDeg = Math.round((selected.userData.tiltAngle || 0) * 180 / Math.PI);
@@ -1746,7 +1820,7 @@ function updateToolbarState() {
       btn.style.background = (deg === currentDeg) ? '#3a7bd5' : '#2a2a2a';
     }
   }
-  dpadPanel.style.display = (selected && !selected.userData.isHole) ? 'grid' : 'none';
+  dpadPanel.style.display = showDpad ? 'grid' : 'none';
 }
 updateToolbarState();
 
