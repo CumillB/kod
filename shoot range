@@ -1,0 +1,2142 @@
+"use strict";
+
+const style = document.createElement("style");/* CLOSE BUTTON */
+
+const closeButton = document.createElement("button");
+
+closeButton.textContent = "×";
+
+closeButton.style.position = "absolute";
+closeButton.style.top = "10px";
+closeButton.style.right = "12px";
+closeButton.style.zIndex = "50";
+closeButton.style.width = "34px";
+closeButton.style.height = "34px";
+closeButton.style.padding = "0";
+closeButton.style.border = "1px solid rgba(255,255,255,.15)";
+closeButton.style.borderRadius = "5px";
+closeButton.style.background = "rgba(0,0,0,.35)";
+closeButton.style.color = "#aaa";
+closeButton.style.fontSize = "25px";
+closeButton.style.lineHeight = "30px";
+closeButton.style.fontWeight = "normal";
+closeButton.style.cursor = "pointer";
+
+closeButton.addEventListener("mouseenter", function() {
+    closeButton.style.background = "#7b302b";
+    closeButton.style.color = "#fff";
+});
+
+closeButton.addEventListener("mouseleave", function() {
+    closeButton.style.background = "rgba(0,0,0,.35)";
+    closeButton.style.color = "#aaa";
+});
+
+closeButton.addEventListener("click", function() {
+
+    running = false;
+
+    try {
+        window.close();
+    } catch (error) {
+    }
+
+    /*
+       Webbläsare tillåter normalt inte JavaScript
+       att stänga en vanlig flik som användaren öppnat.
+       Därför visar vi en stängd skärm om window.close()
+       blockeras.
+    */
+
+    setTimeout(function() {
+
+        document.body.innerHTML = "";
+
+        document.body.style.background = "#080a0c";
+        document.body.style.display = "flex";
+        document.body.style.alignItems = "center";
+        document.body.style.justifyContent = "center";
+
+        const closed = document.createElement("div");
+
+        closed.style.color = "#777";
+        closed.style.fontFamily = "Arial";
+        closed.style.textAlign = "center";
+
+        closed.innerHTML = `
+            <div style="
+                font-size:28px;
+                color:#ccc;
+                letter-spacing:3px;
+                margin-bottom:10px;
+            ">
+                SHOOTING RANGE
+            </div>
+
+            <div style="
+                font-size:12px;
+                color:#666;
+            ">
+                Spelet är stängt
+            </div>
+        `;
+
+        document.body.appendChild(closed);
+
+    }, 100);
+
+});
+
+game.appendChild(closeButton);
+
+style.textContent = `
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: #080a0c;
+    font-family: Arial, sans-serif;
+    overflow: hidden;
+}
+
+body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#game {
+    position: relative;
+    width: 1100px;
+    height: 700px;
+    max-width: 94vw;
+    max-height: 88vh;
+    overflow: hidden;
+    border: 1px solid #303438;
+    border-radius: 8px;
+    box-shadow: 0 25px 80px rgba(0,0,0,.75);
+    background: #111;
+}
+
+canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    cursor: none;
+}
+
+#hud {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 65px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    background: linear-gradient(
+        rgba(5,7,8,.95),
+        rgba(5,7,8,.72)
+    );
+    border-bottom: 1px solid rgba(255,255,255,.08);
+    pointer-events: none;
+}
+
+.hudLeft,
+.hudRight {
+    display: flex;
+    align-items: center;
+    gap: 25px;
+}
+
+.title {
+    font-weight: bold;
+    letter-spacing: 3px;
+    font-size: 16px;
+}
+
+.title small {
+    display: block;
+    color: #6e767b;
+    font-size: 8px;
+    letter-spacing: 2px;
+    margin-top: 3px;
+}
+
+.stat span {
+    display: block;
+    color: #6f777b;
+    font-size: 8px;
+    text-transform: uppercase;
+}
+
+.stat strong {
+    font-size: 19px;
+}
+
+#score {
+    color: #d2e0c1;
+}
+
+#combo {
+    color: #d9b865;
+}
+
+.ammo {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.ammo span {
+    color: #656c70;
+    font-size: 14px;
+}
+
+#crosshair {
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    z-index: 30;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+#crosshair:before {
+    content: "";
+    position: absolute;
+    width: 1px;
+    height: 24px;
+    left: 12px;
+    background: rgba(255,255,255,.7);
+}
+
+#crosshair:after {
+    content: "";
+    position: absolute;
+    width: 24px;
+    height: 1px;
+    top: 12px;
+    background: rgba(255,255,255,.7);
+}
+
+#crosshairDot {
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    left: 10px;
+    top: 10px;
+    border-radius: 50%;
+    background: #d5e6bf;
+}
+
+#message {
+    position: absolute;
+    left: 50%;
+    top: 48%;
+    transform: translate(-50%, -50%);
+    z-index: 20;
+    text-align: center;
+    pointer-events: none;
+    opacity: 0;
+}
+
+#messageMain {
+    font-size: 34px;
+    font-weight: bold;
+    letter-spacing: 2px;
+}
+
+#messageSub {
+    margin-top: 5px;
+    font-size: 11px;
+    color: #999;
+}
+
+#menu {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: rgba(3,5,6,.84);
+}
+
+.card {
+    width: 410px;
+    padding: 32px;
+    background: #0d1012;
+    border: 1px solid #303538;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 25px 70px rgba(0,0,0,.8);
+}
+
+.card h1 {
+    margin: 0;
+    color: #ddd;
+    font-size: 37px;
+    letter-spacing: 4px;
+}
+
+.card h1 span {
+    color: #a9ba91;
+}
+
+.card p {
+    color: #858d91;
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 15px 0 25px;
+}
+
+button {
+    width: 100%;
+    padding: 13px;
+    border: 1px solid #6c775f;
+    border-radius: 5px;
+    background: linear-gradient(#68745d, #4d5847);
+    color: white;
+    font-weight: bold;
+    letter-spacing: 1px;
+    cursor: pointer;
+}
+
+button:hover {
+    filter: brightness(1.15);
+}
+
+.controls {
+    position: absolute;
+    right: 18px;
+    bottom: 15px;
+    z-index: 10;
+    color: #727a7e;
+    font-size: 10px;
+    line-height: 1.8;
+    pointer-events: none;
+}
+
+.hidden {
+    display: none !important;
+}
+
+@media(max-width:800px) {
+    #game {
+        max-width: 96vw;
+        max-height: 80vh;
+    }
+
+    .stat {
+        display: none;
+    }
+
+    .controls {
+        display: none;
+    }
+}
+`;
+
+document.head.appendChild(style);
+
+
+/* GAME CONTAINER */
+
+const game = document.createElement("div");
+game.id = "game";
+document.body.appendChild(game);
+
+
+/* CANVAS */
+
+const canvas = document.createElement("canvas");
+game.appendChild(canvas);
+
+const ctx = canvas.getContext("2d");
+
+const WIDTH = 1100;
+const HEIGHT = 700;
+
+
+/* HUD */
+
+const hud = document.createElement("div");
+hud.id = "hud";
+
+hud.innerHTML = `
+<div class="hudLeft">
+
+    <div class="title">
+        SHOOTING RANGE
+        <small>TRAINING FACILITY</small>
+    </div>
+
+    <div class="stat">
+        <span>Poäng</span>
+        <strong id="score">0</strong>
+    </div>
+
+    <div class="stat">
+        <span>Träffar</span>
+        <strong id="hits">0</strong>
+    </div>
+
+    <div class="stat">
+        <span>Precision</span>
+        <strong id="accuracy">100%</strong>
+    </div>
+
+    <div class="stat">
+        <span>Combo</span>
+        <strong id="combo">x1</strong>
+    </div>
+
+</div>
+
+<div class="hudRight">
+
+    <div class="stat">
+        <span>Tid</span>
+        <strong id="time">60</strong>
+    </div>
+
+    <div class="ammo">
+        <span id="ammo">12</span>
+        <span>/ 36</span>
+    </div>
+
+</div>
+`;
+
+game.appendChild(hud);
+
+
+/* CROSSHAIR */
+
+const crosshair = document.createElement("div");
+crosshair.id = "crosshair";
+crosshair.innerHTML = `<div id="crosshairDot"></div>`;
+game.appendChild(crosshair);
+
+
+/* MESSAGE */
+
+const message = document.createElement("div");
+message.id = "message";
+
+message.innerHTML = `
+<div id="messageMain"></div>
+<div id="messageSub"></div>
+`;
+
+game.appendChild(message);
+
+
+/* CONTROLS */
+
+const controls = document.createElement("div");
+controls.className = "controls";
+
+controls.innerHTML = `
+MUS = SKJUT<br>
+R = LADDA OM<br>
+SPACE = NYTT MÅL
+`;
+
+game.appendChild(controls);
+
+
+/* MENU */
+
+const menu = document.createElement("div");
+menu.id = "menu";
+
+menu.innerHTML = `
+<div class="card">
+
+    <h1>
+        SHOOTING
+        <span>RANGE</span>
+    </h1>
+
+    <p>
+        Testa din precision på en realistisk
+        inomhusbana. Träffa målen snabbt,
+        bygg combos och få högsta möjliga poäng.
+    </p>
+
+    <button id="start">
+        STARTA
+    </button>
+
+</div>
+`;
+
+game.appendChild(menu);
+
+
+/* ELEMENT */
+
+const startButton =
+    document.getElementById("start");
+
+const scoreElement =
+    document.getElementById("score");
+
+const hitsElement =
+    document.getElementById("hits");
+
+const accuracyElement =
+    document.getElementById("accuracy");
+
+const comboElement =
+    document.getElementById("combo");
+
+const timeElement =
+    document.getElementById("time");
+
+const ammoElement =
+    document.getElementById("ammo");
+
+const messageMain =
+    document.getElementById("messageMain");
+
+const messageSub =
+    document.getElementById("messageSub");
+
+
+/* GAME VARIABLES */
+
+let running = false;
+
+let score = 0;
+let hits = 0;
+let shots = 0;
+let combo = 0;
+let bestCombo = 0;
+
+let ammo = 12;
+let reserveAmmo = 36;
+
+let timeLeft = 60;
+
+let mouseX = 550;
+let mouseY = 350;
+
+let recoil = 0;
+let muzzleFlash = 0;
+let shake = 0;
+
+let spawnTimer = 0;
+
+let lastFrame = 0;
+
+let targets = [];
+let particles = [];
+let shells = [];
+let floatingTexts = [];
+let bulletHoles = [];
+
+let audioContext;
+
+
+/* AUDIO */
+
+function sound(frequency, duration, type, volume) {
+
+    try {
+
+        if (!audioContext) {
+
+            audioContext =
+                new (
+                    window.AudioContext ||
+                    window.webkitAudioContext
+                )();
+        }
+
+        const oscillator =
+            audioContext.createOscillator();
+
+        const gain =
+            audioContext.createGain();
+
+        oscillator.type = type || "sine";
+
+        oscillator.frequency.value =
+            frequency;
+
+        gain.gain.value =
+            volume || .03;
+
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+
+        oscillator.start();
+
+        gain.gain.exponentialRampToValueAtTime(
+            .001,
+            audioContext.currentTime + duration
+        );
+
+        oscillator.stop(
+            audioContext.currentTime + duration
+        );
+
+    } catch (error) {
+    }
+}
+
+
+/* START */
+
+function startGame() {
+
+    running = true;
+
+    score = 0;
+    hits = 0;
+    shots = 0;
+    combo = 0;
+    bestCombo = 0;
+
+    ammo = 12;
+    reserveAmmo = 36;
+
+    timeLeft = 60;
+
+    recoil = 0;
+    muzzleFlash = 0;
+    shake = 0;
+
+    targets = [];
+    particles = [];
+    shells = [];
+    floatingTexts = [];
+    bulletHoles = [];
+
+    spawnTimer = .3;
+
+    menu.classList.add("hidden");
+
+    lastFrame = performance.now();
+
+    updateHUD();
+
+    requestAnimationFrame(loop);
+}
+
+
+/* END */
+
+function endGame() {
+
+    running = false;
+
+    menu.classList.remove("hidden");
+
+    const accuracy =
+        shots === 0
+            ? 100
+            : Math.round(
+                hits / shots * 100
+            );
+
+    menu.querySelector("p").innerHTML =
+        "Resultat<br><br>" +
+        "Poäng: " +
+        score +
+        "<br>" +
+        "Träffar: " +
+        hits +
+        "<br>" +
+        "Precision: " +
+        accuracy +
+        "%<br>" +
+        "Bästa combo: x" +
+        bestCombo;
+
+    startButton.textContent =
+        "KÖR IGEN";
+}
+
+
+/* HUD */
+
+function updateHUD() {
+
+    scoreElement.textContent =
+        score.toLocaleString("sv-SE");
+
+    hitsElement.textContent =
+        hits;
+
+    const accuracy =
+        shots === 0
+            ? 100
+            : Math.round(
+                hits / shots * 100
+            );
+
+    accuracyElement.textContent =
+        accuracy + "%";
+
+    comboElement.textContent =
+        "x" + Math.max(1, combo);
+
+    timeElement.textContent =
+        Math.max(0, timeLeft).toFixed(1);
+
+    ammoElement.textContent =
+        ammo;
+}
+
+
+/* TARGET */
+
+function spawnTarget() {
+
+    const size =
+        42 + Math.random() * 35;
+
+    const x =
+        190 + Math.random() * 720;
+
+    const y =
+        240 + Math.random() * 150;
+
+    targets.push({
+
+        x: x,
+
+        y: y,
+
+        size: size,
+
+        life: 0,
+
+        maxLife:
+            3.5 + Math.random() * 2,
+
+        speed:
+            .2 + Math.random() * .5,
+
+        direction:
+            Math.random() < .5 ? -1 : 1,
+
+        moving:
+            Math.random() < .25
+    });
+}
+
+
+/* SHOOT */
+
+function shoot() {
+
+    if (!running)
+        return;
+
+    if (ammo <= 0) {
+
+        reload();
+
+        return;
+    }
+
+    ammo--;
+
+    shots++;
+
+    recoil = 4;
+
+    muzzleFlash = 1;
+
+    shake = 2;
+
+    sound(90, .07, "sawtooth", .08);
+
+    ejectShell();
+
+    let hitTarget = null;
+
+    let closest = Infinity;
+
+    for (const target of targets) {
+
+        const dx =
+            mouseX - target.x;
+
+        const dy =
+            mouseY - target.y;
+
+        const distance =
+            Math.sqrt(
+                dx * dx +
+                dy * dy
+            );
+
+        if (
+            distance <
+            target.size / 2 &&
+            distance <
+            closest
+        ) {
+
+            closest = distance;
+
+            hitTarget = target;
+        }
+    }
+
+    if (hitTarget) {
+
+        hit(hitTarget);
+
+    } else {
+
+        combo = 0;
+
+        floatingText(
+            "MISS",
+            mouseX,
+            mouseY,
+            "#a76c62"
+        );
+    }
+
+    updateHUD();
+}
+
+
+/* HIT */
+
+function hit(target) {
+
+    hits++;
+
+    combo++;
+
+    bestCombo =
+        Math.max(
+            bestCombo,
+            combo
+        );
+
+    const points =
+        100 +
+        combo * 10;
+
+    score += points;
+
+    bulletHoles.push({
+
+        x:
+            target.x +
+            (Math.random() - .5) *
+            target.size * .35,
+
+        y:
+            target.y +
+            (Math.random() - .5) *
+            target.size * .5,
+
+        life: 8
+    });
+
+    for (let i = 0; i < 18; i++) {
+
+        const angle =
+            Math.random() *
+            Math.PI * 2;
+
+        const speed =
+            40 +
+            Math.random() * 100;
+
+        particles.push({
+
+            x: target.x,
+
+            y: target.y,
+
+            vx:
+                Math.cos(angle) *
+                speed,
+
+            vy:
+                Math.sin(angle) *
+                speed,
+
+            life:
+                .3 +
+                Math.random() * .3,
+
+            size:
+                1 +
+                Math.random() * 3
+        });
+    }
+
+    floatingText(
+        "+" + points,
+        target.x,
+        target.y,
+        combo >= 5
+            ? "#e3bd63"
+            : "#d3e3c0"
+    );
+
+    targets.splice(
+        targets.indexOf(target),
+        1
+    );
+
+    sound(
+        700,
+        .05,
+        "triangle",
+        .035
+    );
+}
+
+
+/* RELOAD */
+
+function reload() {
+
+    if (
+        ammo >= 12 ||
+        reserveAmmo <= 0
+    ) {
+        return;
+    }
+
+    setMessage(
+        "LADDAR OM",
+        "",
+        "#ccc"
+    );
+
+    setTimeout(() => {
+
+        const amount =
+            Math.min(
+                12 - ammo,
+                reserveAmmo
+            );
+
+        ammo += amount;
+
+        reserveAmmo -= amount;
+
+        updateHUD();
+
+    }, 800);
+}
+
+
+/* SHELL */
+
+function ejectShell() {
+
+    shells.push({
+
+        x: 705,
+
+        y: 570,
+
+        vx:
+            50 +
+            Math.random() * 70,
+
+        vy:
+            -130 -
+            Math.random() * 80,
+
+        rotation:
+            Math.random() * 6,
+
+        spin:
+            -5 +
+            Math.random() * 10,
+
+        life: 2
+    });
+}
+
+
+/* MOUSE */
+
+canvas.addEventListener(
+    "pointermove",
+    function(event) {
+
+        const rect =
+            canvas.getBoundingClientRect();
+
+        mouseX =
+            (event.clientX - rect.left) /
+            rect.width *
+            WIDTH;
+
+        mouseY =
+            (event.clientY - rect.top) /
+            rect.height *
+            HEIGHT;
+
+        const gameRect =
+            game.getBoundingClientRect();
+
+        crosshair.style.left =
+            (
+                event.clientX -
+                gameRect.left
+            ) + "px";
+
+        crosshair.style.top =
+            (
+                event.clientY -
+                gameRect.top
+            ) + "px";
+    }
+);
+
+
+/* CLICK */
+
+canvas.addEventListener(
+    "pointerdown",
+    function(event) {
+
+        event.preventDefault();
+
+        shoot();
+    }
+);
+
+
+/* KEYBOARD */
+
+document.addEventListener(
+    "keydown",
+    function(event) {
+
+        if (
+            event.key.toLowerCase() === "r"
+        ) {
+
+            reload();
+        }
+
+        if (
+            event.code === "Space"
+        ) {
+
+            event.preventDefault();
+
+            if (!running) {
+
+                startGame();
+
+            } else {
+
+                spawnTarget();
+            }
+        }
+    }
+);
+
+
+/* RANGE */
+
+function drawRange() {
+
+    /* Ceiling */
+
+    const ceiling =
+        ctx.createLinearGradient(
+            0, 65,
+            0, 220
+        );
+
+    ceiling.addColorStop(
+        0,
+        "#101315"
+    );
+
+    ceiling.addColorStop(
+        1,
+        "#292720"
+    );
+
+    ctx.fillStyle = ceiling;
+
+    ctx.fillRect(
+        0,
+        65,
+        WIDTH,
+        160
+    );
+
+
+    /* Back wall */
+
+    const wall =
+        ctx.createLinearGradient(
+            0, 160,
+            0, 450
+        );
+
+    wall.addColorStop(
+        0,
+        "#28231d"
+    );
+
+    wall.addColorStop(
+        1,
+        "#100f0d"
+    );
+
+    ctx.fillStyle = wall;
+
+    ctx.fillRect(
+        120,
+        160,
+        860,
+        300
+    );
+
+
+    /* Floor */
+
+    const floor =
+        ctx.createLinearGradient(
+            0, 430,
+            0, 700
+        );
+
+    floor.addColorStop(
+        0,
+        "#514a3d"
+    );
+
+    floor.addColorStop(
+        1,
+        "#171715"
+    );
+
+    ctx.fillStyle = floor;
+
+    ctx.fillRect(
+        0,
+        430,
+        WIDTH,
+        270
+    );
+
+
+    /* Side walls */
+
+    ctx.fillStyle =
+        "#27211b";
+
+    ctx.fillRect(
+        0,
+        120,
+        120,
+        380
+    );
+
+    ctx.fillRect(
+        980,
+        120,
+        120,
+        380
+    );
+
+
+    /* Wood lines */
+
+    ctx.strokeStyle =
+        "rgba(190,150,100,.15)";
+
+    ctx.lineWidth = 3;
+
+    for (
+        let y = 130;
+        y < 500;
+        y += 45
+    ) {
+
+        ctx.beginPath();
+
+        ctx.moveTo(0, y);
+
+        ctx.lineTo(120, y);
+
+        ctx.stroke();
+
+        ctx.beginPath();
+
+        ctx.moveTo(980, y);
+
+        ctx.lineTo(1100, y);
+
+        ctx.stroke();
+    }
+
+
+    /* Floor perspective */
+
+    ctx.strokeStyle =
+        "rgba(220,200,160,.12)";
+
+    ctx.lineWidth = 2;
+
+    for (
+        let x = 100;
+        x <= 1000;
+        x += 150
+    ) {
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            550,
+            430
+        );
+
+        ctx.lineTo(
+            x,
+            700
+        );
+
+        ctx.stroke();
+    }
+
+
+    /* Ceiling beams */
+
+    ctx.fillStyle =
+        "#151616";
+
+    for (
+        let x = 130;
+        x < 1000;
+        x += 175
+    ) {
+
+        ctx.fillRect(
+            x,
+            110,
+            25,
+            85
+        );
+    }
+
+
+    /* Lights */
+
+    for (
+        let x = 210;
+        x < 950;
+        x += 180
+    ) {
+
+        ctx.fillStyle =
+            "#d7d0b9";
+
+        ctx.fillRect(
+            x,
+            135,
+            65,
+            7
+        );
+
+        const glow =
+            ctx.createRadialGradient(
+                x + 32,
+                142,
+                2,
+                x + 32,
+                142,
+                90
+            );
+
+        glow.addColorStop(
+            0,
+            "rgba(255,235,190,.14)"
+        );
+
+        glow.addColorStop(
+            1,
+            "rgba(255,235,190,0)"
+        );
+
+        ctx.fillStyle = glow;
+
+        ctx.fillRect(
+            x - 60,
+            80,
+            185,
+            140
+        );
+    }
+
+
+    /* Distance */
+
+    ctx.font =
+        "bold 22px Arial";
+
+    ctx.textAlign =
+        "center";
+
+    ctx.fillStyle =
+        "rgba(220,210,190,.35)";
+
+    const distances = [
+        [230, "10"],
+        [410, "15"],
+        [590, "20"],
+        [770, "25"],
+        [930, "30"]
+    ];
+
+    for (const d of distances) {
+
+        ctx.fillText(
+            d[1],
+            d[0],
+            105
+        );
+    }
+}
+
+
+/* TARGET */
+
+function drawTarget(target) {
+
+    const s =
+        target.size;
+
+    ctx.save();
+
+
+    /* Shadow */
+
+    ctx.fillStyle =
+        "rgba(0,0,0,.45)";
+
+    ctx.beginPath();
+
+    ctx.ellipse(
+        target.x + 5,
+        target.y + 6,
+        s * .52,
+        s * .8,
+        0,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+
+    /* Paper */
+
+    ctx.fillStyle =
+        "#d5d0c2";
+
+    ctx.fillRect(
+        target.x - s / 2,
+        target.y - s * .75,
+        s,
+        s * 1.5
+    );
+
+
+    /* Silhouette */
+
+    ctx.fillStyle =
+        "#171819";
+
+    ctx.beginPath();
+
+    ctx.arc(
+        target.x,
+        target.y - s * .43,
+        s * .15,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        target.x - s * .24,
+        target.y - s * .25
+    );
+
+    ctx.quadraticCurveTo(
+        target.x - s * .38,
+        target.y + s * .15,
+        target.x - s * .28,
+        target.y + s * .65
+    );
+
+    ctx.lineTo(
+        target.x + s * .28,
+        target.y + s * .65
+    );
+
+    ctx.quadraticCurveTo(
+        target.x + s * .38,
+        target.y + s * .15,
+        target.x + s * .24,
+        target.y - s * .25
+    );
+
+    ctx.closePath();
+
+    ctx.fill();
+
+
+    /* Rings */
+
+    const rings = [
+        [.31, "#d5d0c2"],
+        [.24, "#171819"],
+        [.16, "#c3bcad"],
+        [.09, "#18191a"],
+        [.045, "#9c4d42"]
+    ];
+
+    for (const ring of rings) {
+
+        ctx.strokeStyle =
+            ring[1];
+
+        ctx.lineWidth = 2;
+
+        ctx.beginPath();
+
+        ctx.ellipse(
+            target.x,
+            target.y,
+            s * ring[0],
+            s * ring[0] * 1.2,
+            0,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.stroke();
+    }
+
+
+    /* Bullet holes */
+
+    for (const hole of bulletHoles) {
+
+        if (
+            Math.abs(hole.x - target.x) <
+            s &&
+            Math.abs(hole.y - target.y) <
+            s
+        ) {
+
+            ctx.fillStyle =
+                "#111";
+
+            ctx.beginPath();
+
+            ctx.arc(
+                hole.x,
+                hole.y,
+                2.5,
+                0,
+                Math.PI * 2
+            );
+
+            ctx.fill();
+        }
+    }
+
+
+    ctx.restore();
+}
+
+
+/* TARGET UPDATE */
+
+function updateTargets(dt) {
+
+    for (
+        let i = targets.length - 1;
+        i >= 0;
+        i--
+    ) {
+
+        const target =
+            targets[i];
+
+        target.life += dt;
+
+        if (target.moving) {
+
+            target.x +=
+                target.speed *
+                target.direction *
+                35 *
+                dt;
+
+            if (
+                target.x < 180 ||
+                target.x > 920
+            ) {
+
+                target.direction *= -1;
+            }
+        }
+
+        if (
+            target.life >
+            target.maxLife
+        ) {
+
+            targets.splice(i, 1);
+
+            combo = 0;
+
+            continue;
+        }
+
+        drawTarget(target);
+    }
+}
+
+
+/* PARTICLES */
+
+function updateParticles(dt) {
+
+    for (
+        let i = particles.length - 1;
+        i >= 0;
+        i--
+    ) {
+
+        const p =
+            particles[i];
+
+        p.life -= dt;
+
+        p.x +=
+            p.vx * dt;
+
+        p.y +=
+            p.vy * dt;
+
+        p.vx *= .96;
+        p.vy *= .96;
+
+        if (p.life <= 0) {
+
+            particles.splice(i, 1);
+
+            continue;
+        }
+
+        ctx.globalAlpha =
+            Math.min(1, p.life * 3);
+
+        ctx.fillStyle =
+            "#d3c5a5";
+
+        ctx.fillRect(
+            p.x,
+            p.y,
+            p.size,
+            p.size
+        );
+
+        ctx.globalAlpha = 1;
+    }
+}
+
+
+/* SHELLS */
+
+function updateShells(dt) {
+
+    for (
+        let i = shells.length - 1;
+        i >= 0;
+        i--
+    ) {
+
+        const shell =
+            shells[i];
+
+        shell.life -= dt;
+
+        shell.vy +=
+            250 * dt;
+
+        shell.x +=
+            shell.vx * dt;
+
+        shell.y +=
+            shell.vy * dt;
+
+        shell.rotation +=
+            shell.spin * dt;
+
+        if (
+            shell.life <= 0 ||
+            shell.y > 690
+        ) {
+
+            shells.splice(i, 1);
+
+            continue;
+        }
+
+        ctx.save();
+
+        ctx.translate(
+            shell.x,
+            shell.y
+        );
+
+        ctx.rotate(
+            shell.rotation
+        );
+
+        ctx.fillStyle =
+            "#b58c4d";
+
+        ctx.fillRect(
+            -2,
+            -6,
+            4,
+            12
+        );
+
+        ctx.fillStyle =
+            "#e0b86c";
+
+        ctx.fillRect(
+            -2,
+            -6,
+            4,
+            2
+        );
+
+        ctx.restore();
+    }
+}
+
+
+/* FLOATING TEXT */
+
+function floatingText(
+    text,
+    x,
+    y,
+    color
+) {
+
+    floatingTexts.push({
+
+        text: text,
+
+        x: x,
+
+        y: y,
+
+        color: color,
+
+        life: 1
+    });
+}
+
+
+function updateFloatingTexts(dt) {
+
+    for (
+        let i = floatingTexts.length - 1;
+        i >= 0;
+        i--
+    ) {
+
+        const t =
+            floatingTexts[i];
+
+        t.life -= dt;
+
+        t.y -=
+            25 * dt;
+
+        if (t.life <= 0) {
+
+            floatingTexts.splice(i, 1);
+
+            continue;
+        }
+
+        ctx.globalAlpha =
+            Math.min(1, t.life * 2);
+
+        ctx.font =
+            "bold 20px Arial";
+
+        ctx.textAlign =
+            "center";
+
+        ctx.fillStyle =
+            t.color;
+
+        ctx.fillText(
+            t.text,
+            t.x,
+            t.y
+        );
+
+        ctx.globalAlpha = 1;
+    }
+}
+
+
+/* WEAPON */
+
+function drawWeapon() {
+
+    ctx.save();
+
+    const kick =
+        recoil;
+
+    /* Arm */
+
+    ctx.fillStyle =
+        "#4b382d";
+
+    ctx.beginPath();
+
+    ctx.moveTo(450, 700);
+
+    ctx.lineTo(520, 700);
+
+    ctx.lineTo(
+        600,
+        555 + kick
+    );
+
+    ctx.lineTo(
+        550,
+        540 + kick
+    );
+
+    ctx.closePath();
+
+    ctx.fill();
+
+
+    /* Hand */
+
+    ctx.fillStyle =
+        "#1d2020";
+
+    ctx.beginPath();
+
+    ctx.moveTo(510, 700);
+
+    ctx.lineTo(580, 700);
+
+    ctx.lineTo(
+        625,
+        585 + kick
+    );
+
+    ctx.lineTo(
+        580,
+        555 + kick
+    );
+
+    ctx.closePath();
+
+    ctx.fill();
+
+
+    /* Slide */
+
+    ctx.fillStyle =
+        "#151718";
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        555,
+        525 + kick
+    );
+
+    ctx.lineTo(
+        680,
+        525 + kick
+    );
+
+    ctx.lineTo(
+        692,
+        555 + kick
+    );
+
+    ctx.lineTo(
+        550,
+        555 + kick
+    );
+
+    ctx.closePath();
+
+    ctx.fill();
+
+
+    /* Slide highlight */
+
+    ctx.strokeStyle =
+        "#4d5253";
+
+    ctx.lineWidth = 2;
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        565,
+        531 + kick
+    );
+
+    ctx.lineTo(
+        672,
+        531 + kick
+    );
+
+    ctx.stroke();
+
+
+    /* Barrel */
+
+    ctx.fillStyle =
+        "#080909";
+
+    ctx.fillRect(
+        610,
+        548 + kick,
+        65,
+        10
+    );
+
+
+    /* Grip */
+
+    ctx.fillStyle =
+        "#151616";
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        575,
+        550 + kick
+    );
+
+    ctx.lineTo(
+        640,
+        550 + kick
+    );
+
+    ctx.lineTo(
+        625,
+        670 + kick
+    );
+
+    ctx.lineTo(
+        550,
+        670 + kick
+    );
+
+    ctx.closePath();
+
+    ctx.fill();
+
+
+    /* Grip texture */
+
+    ctx.strokeStyle =
+        "#363939";
+
+    for (
+        let y = 580;
+        y < 650;
+        y += 12
+    ) {
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            557,
+            y + kick
+        );
+
+        ctx.lineTo(
+            625,
+            y + kick
+        );
+
+        ctx.stroke();
+    }
+
+
+    /* Sight */
+
+    ctx.fillStyle =
+        "#070808";
+
+    ctx.fillRect(
+        615,
+        518 + kick,
+        9,
+        11
+    );
+
+    ctx.fillRect(
+        667,
+        517 + kick,
+        4,
+        12
+    );
+
+
+    /* Muzzle flash */
+
+    if (muzzleFlash > 0) {
+
+        const flash =
+            ctx.createRadialGradient(
+                700,
+                552 + kick,
+                2,
+                700,
+                552 + kick,
+                60
+            );
+
+        flash.addColorStop(
+            0,
+            "rgba(255,255,220,.95)"
+        );
+
+        flash.addColorStop(
+            .2,
+            "rgba(255,190,70,.8)"
+        );
+
+        flash.addColorStop(
+            1,
+            "rgba(255,80,10,0)"
+        );
+
+        ctx.fillStyle = flash;
+
+        ctx.beginPath();
+
+        ctx.arc(
+            700,
+            552 + kick,
+            60,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fill();
+    }
+
+    ctx.restore();
+}
+
+
+/* MESSAGE */
+
+function setMessage(
+    main,
+    sub,
+    color
+) {
+
+    messageMain.textContent =
+        main;
+
+    messageSub.textContent =
+        sub;
+
+    messageMain.style.color =
+        color;
+
+    message.style.opacity =
+        "1";
+
+    clearTimeout(
+        setMessage.timer
+    );
+
+    setMessage.timer =
+        setTimeout(
+            function() {
+
+                message.style.opacity =
+                    "0";
+
+            },
+            600
+        );
+}
+
+
+/* GAME LOOP */
+
+function loop(now) {
+
+    if (!running)
+        return;
+
+    const dt =
+        Math.min(
+            .033,
+            (now - lastFrame) / 1000
+        );
+
+    lastFrame = now;
+
+    timeLeft -= dt;
+
+    recoil *=
+        Math.pow(.03, dt);
+
+    muzzleFlash -=
+        dt * 8;
+
+    shake *=
+        Math.pow(.03, dt);
+
+    ctx.clearRect(
+        0,
+        0,
+        WIDTH,
+        HEIGHT
+    );
+
+    ctx.save();
+
+    if (shake > .05) {
+
+        ctx.translate(
+            (Math.random() - .5) *
+            shake * 3,
+
+            (Math.random() - .5) *
+            shake * 3
+        );
+    }
+
+    drawRange();
+
+    spawnTimer -= dt;
+
+    if (spawnTimer <= 0) {
+
+        spawnTarget();
+
+        spawnTimer =
+            .5 +
+            Math.random() * .8;
+    }
+
+    updateTargets(dt);
+
+    updateParticles(dt);
+
+    updateShells(dt);
+
+    updateFloatingTexts(dt);
+
+    drawWeapon();
+
+    ctx.restore();
+
+    updateHUD();
+
+    if (timeLeft <= 0) {
+
+        timeLeft = 0;
+
+        endGame();
+
+        return;
+    }
+
+    requestAnimationFrame(loop);
+}
+
+
+/* START BUTTON */
+
+startButton.addEventListener(
+    "click",
+    startGame
+);
+
+
+/* CANVAS SCALE */
+
+function resizeCanvas() {
+
+    const rect =
+        canvas.getBoundingClientRect();
+
+    const ratio =
+        window.devicePixelRatio || 1;
+
+    canvas.width =
+        WIDTH * ratio;
+
+    canvas.height =
+        HEIGHT * ratio;
+
+    ctx.setTransform(
+        ratio,
+        0,
+        0,
+        ratio,
+        0,
+        0
+    );
+}
+
+window.addEventListener(
+    "resize",
+    resizeCanvas
+);
+
+resizeCanvas();
+
+updateHUD();
