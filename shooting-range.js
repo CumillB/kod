@@ -449,8 +449,7 @@
     </div>
 
     <div class="sr-ammo">
-        <span data-role="ammo">12</span>
-        <span>/ 36</span>
+        <span data-role="ammo">∞</span>
     </div>
 
 </div>
@@ -546,7 +545,6 @@ SPACE = NYTT MÅL
     const accuracyElement = hud.querySelector('[data-role="accuracy"]');
     const comboElement = hud.querySelector('[data-role="combo"]');
     const timeElement = hud.querySelector('[data-role="time"]');
-    const ammoElement = hud.querySelector('[data-role="ammo"]');
 
     const messageMain = message.querySelector('[data-role="messageMain"]');
     const messageSub = message.querySelector('[data-role="messageSub"]');
@@ -563,9 +561,6 @@ SPACE = NYTT MÅL
     let combo = 0;
     let bestCombo = 0;
 
-    let ammo = 12;
-    let reserveAmmo = 36;
-
     let timeLeft = 60;
 
     let mouseX = 550;
@@ -576,6 +571,7 @@ SPACE = NYTT MÅL
     let shake = 0;
 
     let spawnTimer = 0;
+    let reloadCooldown = 0;
 
     let lastFrame = 0;
     let rafId = null;
@@ -587,40 +583,266 @@ SPACE = NYTT MÅL
     let bulletHoles = [];
 
     let audioContext;
+    let noiseBuffer = null;
 
     let messageTimer = null;
 
 
     /* ---------- AUDIO ---------- */
+    /*
+        Enkla oscillator-toner (sinus/sågtand) låter aldrig som ett
+        riktigt skott — ett riktigt skott är i grunden BRUS (ett
+        knall/crack) plus en kort lågfrekvent "kick" i bröstet, inte
+        en ren ton. Därför genereras här en kort brusbuffert en gång
+        (istället för en massa oscillatorer) och formas sedan med
+        filter + snabb volym-envelope för olika ljud:
 
+        - playGunshot(): brus genom ett bandpass/highpass-filter för
+          den knastriga smällen + en kort lågfrekvent sinus-"kick"
+          för tryckvågskänslan, plus en svag efterklang (rumsstudsar).
+        - playHit(): två lätt feldetonerade toner som klingar av
+          snabbt, för en metallisk "ring" som en stålplåt/target.
+        - playMechClick(): två korta, mycket kort filtrerade
+          brusklick efter varandra — simulerar slidens/magasinets
+          mekaniska ljud vid en (kosmetisk) omladdning.
+    */
+
+    function getAudioContext() {
+
+        if (!audioContext) {
+            audioContext =
+                new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        return audioContext;
+    }
+
+    function getNoiseBuffer(ctxA) {
+
+        if (noiseBuffer) return noiseBuffer;
+
+        const length = ctxA.sampleRate * 0.5;
+        const buffer = ctxA.createBuffer(1, length, ctxA.sampleRate);
+        const data = buffer.getChannelData(0);
+
+        for (let i = 0; i < length; i++) {
+            data[i] = Math.random() * 2 - 1;
+        }
+
+        noiseBuffer = buffer;
+
+        return noiseBuffer;
+    }
+
+    // Kvar för bakåtkompatibilitet / enstaka enkla toner
     function sound(frequency, duration, type, volume) {
 
         try {
 
-            if (!audioContext) {
+            const ctxA = getAudioContext();
 
-                audioContext =
-                    new (window.AudioContext || window.webkitAudioContext)();
-            }
-
-            const oscillator = audioContext.createOscillator();
-            const gain = audioContext.createGain();
+            const oscillator = ctxA.createOscillator();
+            const gain = ctxA.createGain();
 
             oscillator.type = type || "sine";
             oscillator.frequency.value = frequency;
             gain.gain.value = volume || .03;
 
             oscillator.connect(gain);
-            gain.connect(audioContext.destination);
+            gain.connect(ctxA.destination);
 
             oscillator.start();
 
             gain.gain.exponentialRampToValueAtTime(
                 .001,
-                audioContext.currentTime + duration
+                ctxA.currentTime + duration
             );
 
-            oscillator.stop(audioContext.currentTime + duration);
+            oscillator.stop(ctxA.currentTime + duration);
+
+        } catch (error) {
+        }
+    }
+
+
+    function playGunshot() {
+
+        try {
+
+            const ctxA = getAudioContext();
+            const now = ctxA.currentTime;
+
+
+            /* --- Brus-"crack" (den knastriga smällen) --- */
+
+            const crackSource = ctxA.createBufferSource();
+            crackSource.buffer = getNoiseBuffer(ctxA);
+
+            const crackFilter = ctxA.createBiquadFilter();
+            crackFilter.type = "bandpass";
+            crackFilter.frequency.value = 1800;
+            crackFilter.Q.value = 0.6;
+
+            const crackGain = ctxA.createGain();
+            crackGain.gain.setValueAtTime(.5, now);
+            crackGain.gain.exponentialRampToValueAtTime(.001, now + .09);
+
+            crackSource.connect(crackFilter);
+            crackFilter.connect(crackGain);
+            crackGain.connect(ctxA.destination);
+
+            crackSource.start(now);
+            crackSource.stop(now + .1);
+
+
+            /* --- Hög, kort "snap" ovanpå bruset (transient) --- */
+
+            const snapFilter = ctxA.createBiquadFilter();
+            snapFilter.type = "highpass";
+            snapFilter.frequency.value = 3500;
+
+            const snapGain = ctxA.createGain();
+            snapGain.gain.setValueAtTime(.35, now);
+            snapGain.gain.exponentialRampToValueAtTime(.001, now + .035);
+
+            const snapSource = ctxA.createBufferSource();
+            snapSource.buffer = getNoiseBuffer(ctxA);
+
+            snapSource.connect(snapFilter);
+            snapFilter.connect(snapGain);
+            snapGain.connect(ctxA.destination);
+
+            snapSource.start(now);
+            snapSource.stop(now + .04);
+
+
+            /* --- Låg "kick" (tryckvåg/bröst-känsla) --- */
+
+            const kick = ctxA.createOscillator();
+            kick.type = "sine";
+            kick.frequency.setValueAtTime(150, now);
+            kick.frequency.exponentialRampToValueAtTime(45, now + .08);
+
+            const kickGain = ctxA.createGain();
+            kickGain.gain.setValueAtTime(.6, now);
+            kickGain.gain.exponentialRampToValueAtTime(.001, now + .12);
+
+            kick.connect(kickGain);
+            kickGain.connect(ctxA.destination);
+
+            kick.start(now);
+            kick.stop(now + .13);
+
+
+            /* --- Svag efterklang (rumsstuds, ger djup) --- */
+
+            const tailSource = ctxA.createBufferSource();
+            tailSource.buffer = getNoiseBuffer(ctxA);
+
+            const tailFilter = ctxA.createBiquadFilter();
+            tailFilter.type = "lowpass";
+            tailFilter.frequency.value = 900;
+
+            const tailGain = ctxA.createGain();
+            tailGain.gain.setValueAtTime(.08, now + .03);
+            tailGain.gain.exponentialRampToValueAtTime(.001, now + .3);
+
+            tailSource.connect(tailFilter);
+            tailFilter.connect(tailGain);
+            tailGain.connect(ctxA.destination);
+
+            tailSource.start(now + .03);
+            tailSource.stop(now + .32);
+
+        } catch (error) {
+        }
+    }
+
+
+    function playHit() {
+
+        try {
+
+            const ctxA = getAudioContext();
+            const now = ctxA.currentTime;
+
+            // Två lätt feldetonerade toner = metallisk "ring",
+            // som en kula som träffar en stålplatta.
+            const freqs = [1400, 1660];
+
+            for (const f of freqs) {
+
+                const osc = ctxA.createOscillator();
+                osc.type = "triangle";
+                osc.frequency.setValueAtTime(f, now);
+                osc.frequency.exponentialRampToValueAtTime(f * 0.85, now + .18);
+
+                const gain = ctxA.createGain();
+                gain.gain.setValueAtTime(.05, now);
+                gain.gain.exponentialRampToValueAtTime(.001, now + .2);
+
+                osc.connect(gain);
+                gain.connect(ctxA.destination);
+
+                osc.start(now);
+                osc.stop(now + .22);
+            }
+
+            // Kort brusknäpp i attacken för lite metallisk "grus"
+            const noise = ctxA.createBufferSource();
+            noise.buffer = getNoiseBuffer(ctxA);
+
+            const noiseFilter = ctxA.createBiquadFilter();
+            noiseFilter.type = "highpass";
+            noiseFilter.frequency.value = 4000;
+
+            const noiseGain = ctxA.createGain();
+            noiseGain.gain.setValueAtTime(.06, now);
+            noiseGain.gain.exponentialRampToValueAtTime(.001, now + .03);
+
+            noise.connect(noiseFilter);
+            noiseFilter.connect(noiseGain);
+            noiseGain.connect(ctxA.destination);
+
+            noise.start(now);
+            noise.stop(now + .04);
+
+        } catch (error) {
+        }
+    }
+
+
+    function playMechClick() {
+
+        try {
+
+            const ctxA = getAudioContext();
+            const now = ctxA.currentTime;
+
+            // Två korta klick efter varandra: magasin/slid-känsla
+            const clicks = [0, .09];
+
+            for (const delay of clicks) {
+
+                const clickSource = ctxA.createBufferSource();
+                clickSource.buffer = getNoiseBuffer(ctxA);
+
+                const clickFilter = ctxA.createBiquadFilter();
+                clickFilter.type = "bandpass";
+                clickFilter.frequency.value = 2600;
+                clickFilter.Q.value = 1.2;
+
+                const clickGain = ctxA.createGain();
+                clickGain.gain.setValueAtTime(.4, now + delay);
+                clickGain.gain.exponentialRampToValueAtTime(.001, now + delay + .025);
+
+                clickSource.connect(clickFilter);
+                clickFilter.connect(clickGain);
+                clickGain.connect(ctxA.destination);
+
+                clickSource.start(now + delay);
+                clickSource.stop(now + delay + .03);
+            }
 
         } catch (error) {
         }
@@ -640,9 +862,6 @@ SPACE = NYTT MÅL
         shots = 0;
         combo = 0;
         bestCombo = 0;
-
-        ammo = 12;
-        reserveAmmo = 36;
 
         timeLeft = 60;
 
@@ -703,7 +922,6 @@ SPACE = NYTT MÅL
         accuracyElement.textContent = accuracy + "%";
         comboElement.textContent = "x" + Math.max(1, combo);
         timeElement.textContent = Math.max(0, timeLeft).toFixed(1);
-        ammoElement.textContent = ammo;
     }
 
 
@@ -734,19 +952,13 @@ SPACE = NYTT MÅL
 
         if (!running) return;
 
-        if (ammo <= 0) {
-            reload();
-            return;
-        }
-
-        ammo--;
         shots++;
 
         recoil = 1;
         muzzleFlash = 1;
         shake = 2;
 
-        sound(90, .07, "sawtooth", .08);
+        playGunshot();
 
         ejectShell();
 
@@ -817,7 +1029,7 @@ SPACE = NYTT MÅL
 
         targets.splice(targets.indexOf(target), 1);
 
-        sound(700, .05, "triangle", .035);
+        playHit();
     }
 
 
@@ -825,24 +1037,17 @@ SPACE = NYTT MÅL
 
     function reload() {
 
-        if (ammo >= 12 || reserveAmmo <= 0) {
-            return;
-        }
+        // Ammo är oändlig — det här är bara en kosmetisk
+        // taktisk omladdning för känslans skull, påverkar
+        // ingen räkning.
 
-        setMessage("LADDAR OM", "", "#ccc");
+        if (reloadCooldown > 0) return;
 
-        setTimeout(() => {
+        reloadCooldown = 1.1;
 
-            if (destroyed) return;
+        setMessage("TAKTISK OMLADDNING", "", "#ccc");
 
-            const amount = Math.min(12 - ammo, reserveAmmo);
-
-            ammo += amount;
-            reserveAmmo -= amount;
-
-            updateHUD();
-
-        }, 800);
+        playMechClick();
     }
 
 
@@ -1284,16 +1489,53 @@ SPACE = NYTT MÅL
         ctx.closePath();
         ctx.fill();
 
-        // Greppstruktur (räfflor)
-        ctx.strokeStyle = "#363939";
+        // Greppstruktur — diamantmönstrad checkering (som på riktiga
+        // pistolgrepp) istället för enkla horisontella räfflor.
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(575, 552);
+        ctx.lineTo(638, 552);
+        ctx.lineTo(627, 665);
+        ctx.lineTo(554, 665);
+        ctx.closePath();
+        ctx.clip();
+
+        ctx.strokeStyle = "rgba(70,74,74,.9)";
         ctx.lineWidth = 1;
 
-        for (let y = 578; y < 648; y += 8) {
+        for (let d = -40; d < 100; d += 6) {
             ctx.beginPath();
-            ctx.moveTo(559, y);
-            ctx.lineTo(624, y);
+            ctx.moveTo(552 + d, 552);
+            ctx.lineTo(552 + d + 90, 665);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(640 - d, 552);
+            ctx.lineTo(640 - d - 90, 665);
             ctx.stroke();
         }
+
+        ctx.restore();
+
+        // Grip-panelens ram (avgränsning mot slide/ramens metall)
+        ctx.strokeStyle = "#050606";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(575, 552);
+        ctx.lineTo(638, 552);
+        ctx.lineTo(627, 665);
+        ctx.lineTo(554, 665);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Greppskruv (litet detaljelement)
+        ctx.fillStyle = "#5a5d5d";
+        ctx.beginPath();
+        ctx.arc(566, 600, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(615, 600, 2.4, 0, Math.PI * 2);
+        ctx.fill();
 
         // Magasinsbotten
         ctx.fillStyle = "#0a0b0b";
@@ -1310,6 +1552,39 @@ SPACE = NYTT MÅL
         ctx.lineTo(608, 578);
         ctx.closePath();
         ctx.fill();
+
+        // Accessory-rail-skåror under pipan (som på moderna pistoler)
+        ctx.strokeStyle = "#050606";
+        ctx.lineWidth = 1;
+
+        for (let x = 612; x < 656; x += 6) {
+            ctx.beginPath();
+            ctx.moveTo(x, 573);
+            ctx.lineTo(x, 578);
+            ctx.stroke();
+        }
+
+        // Slide stop-spak (liten hävarm på ramens sida)
+        ctx.fillStyle = "#26282a";
+        ctx.beginPath();
+        ctx.moveTo(583, 553);
+        ctx.lineTo(597, 550);
+        ctx.lineTo(598, 556);
+        ctx.lineTo(585, 559);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "#050606";
+        ctx.lineWidth = .5;
+        ctx.stroke();
+
+        // Takedown-spak (liten cirkel, klassisk detalj på semiauto-pistoler)
+        ctx.fillStyle = "#26282a";
+        ctx.beginPath();
+        ctx.arc(590, 566, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#050606";
+        ctx.lineWidth = 1;
+        ctx.stroke();
 
         ctx.restore(); // slut på frame-translate
 
@@ -1404,25 +1679,60 @@ SPACE = NYTT MÅL
             const flashX = baseX + 60 - slideKick * 0.6;
             const flashY = baseY - slideKick;
 
-            const flash = ctx.createRadialGradient(
-                flashX, flashY, 2,
-                flashX, flashY, 55
-            );
+            const intensity = Math.min(1, muzzleFlash);
 
-            flash.addColorStop(0, "rgba(255,255,220,.95)");
-            flash.addColorStop(.2, "rgba(255,190,70,.8)");
-            flash.addColorStop(1, "rgba(255,80,10,0)");
+            ctx.save();
+            ctx.translate(flashX, flashY);
+            ctx.globalAlpha = intensity;
 
-            ctx.fillStyle = flash;
+            // Bakre, mjuk glöd (ljusspill i rummet)
+            const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, 70);
+            glow.addColorStop(0, "rgba(255,235,190,.55)");
+            glow.addColorStop(1, "rgba(255,150,40,0)");
+            ctx.fillStyle = glow;
             ctx.beginPath();
-            ctx.arc(flashX, flashY, 55, 0, Math.PI * 2);
+            ctx.arc(0, 0, 70, 0, Math.PI * 2);
             ctx.fill();
 
-            // extra ljuskärna
-            ctx.fillStyle = "rgba(255,250,235,.9)";
+            // Stjärnformad krutflamma — klassisk "muzzle flash"-form
+            // med omväxlande långa/korta spikar, lätt roterad slumpmässigt
+            // varje skott för att inte se stel/repetitiv ut.
+            const spikes = 7;
+            const rotation = Math.random() * Math.PI * 2;
+
+            const flashShape = ctx.createRadialGradient(0, 0, 1, 0, 0, 42);
+            flashShape.addColorStop(0, "rgba(255,255,235,.98)");
+            flashShape.addColorStop(.35, "rgba(255,195,80,.9)");
+            flashShape.addColorStop(1, "rgba(255,90,15,0)");
+
+            ctx.fillStyle = flashShape;
             ctx.beginPath();
-            ctx.arc(flashX, flashY, 8, 0, Math.PI * 2);
+
+            for (let i = 0; i < spikes * 2; i++) {
+
+                const angle = rotation + (Math.PI / spikes) * i;
+                const radius = (i % 2 === 0) ? (30 + Math.random() * 12) : 10;
+
+                const px = Math.cos(angle) * radius;
+                const py = Math.sin(angle) * radius;
+
+                if (i === 0) {
+                    ctx.moveTo(px, py);
+                } else {
+                    ctx.lineTo(px, py);
+                }
+            }
+
+            ctx.closePath();
             ctx.fill();
+
+            // Vitglödgad kärna precis vid mynningen
+            ctx.fillStyle = "rgba(255,252,240,.95)";
+            ctx.beginPath();
+            ctx.arc(0, 0, 6, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
         }
 
         ctx.restore();
@@ -1461,6 +1771,7 @@ SPACE = NYTT MÅL
         recoil *= Math.pow(.02, dt * 6);
         muzzleFlash -= dt * 8;
         shake *= Math.pow(.03, dt);
+        reloadCooldown = Math.max(0, reloadCooldown - dt);
 
         ctx.clearRect(0, 0, WIDTH, HEIGHT);
 
