@@ -1,92 +1,51 @@
 "use strict";
 
 /*
-    SHOOTING RANGE — Kanvas-anpassad version
-    =========================================
+    SHOOTING RANGE — 3D-version (Three.js / WebGL)
+    ================================================
 
-    Ändringar jämfört med originalet:
+    Detta är en ombyggnad av 2D-canvas-versionen till riktig 3D:
 
-    1) BUGFIX: Originalet refererade till variabeln `game`
-       (closeButton.appendChild) INNAN `const game = ...`
-       ens deklarerats längre ner i filen. Med `const`/`let`
-       ger det en ReferenceError (temporal dead zone) och
-       hela scriptet kraschade direkt vid körning — spelet
-       kunde alltså aldrig starta. Ordningen är nu fixad.
+    - En riktig 3D-bana (golv, väggar, tak, lampor) med kamera som
+      står still längst fram, ungefär som att stå vid en skjutbås.
+    - Pappersmålen är riktiga 3D-plan i rummet på VARIERANDE DJUP
+      (inte bara x/y som i 2D-versionen) — mål längre bort ser
+      naturligt mindre ut genom kamerans perspektiv.
+    - Träffdetektion sker med riktig 3D-raycasting (en stråle skjuts
+      från kameran genom siktpunkten och testas mot målen i rummet),
+      istället för en 2D-avståndsberäkning.
+    - Vapnet är en egen 3D-modell som hänger i kamerans "hand":
+        * Det svänger mjukt efter var du siktar (med en liten
+          eftersläpning/lag, inte direkt hopp) — "aim sway".
+        * Det har en egen liten andningsrörelse i vila (idle bob).
+        * Vid skott: sliden rör sig separat bakåt (blowback-känsla)
+          och hela vapnet knycker till och fjädrar tillbaka.
+        * Mynningsflamma är ett riktigt ljus + en glödande sprite
+          i 3D-rummet, inte bara en cirkel ritad på en 2D-yta.
+    - Three.js laddas från cdnjs vid körning (kräver internet).
+      Om det inte går att ladda visas ett felmeddelande i menyn
+      istället för att scriptet kraschar.
 
-    2) Allt är inkapslat i en IIFE (self-invoking function)
-       så inga variabler läcker till `window`. Det gör att
-       rutan kan köras flera gånger, eller sida vid sida med
-       andra Kanvas-rutor, utan att krocka med `const`/`let`
-       som redan finns i den delade scopen.
-
-    3) CSS:en är omskriven så att ALLA regler är prefixade
-       med en unik root-klass (.sr-app-XXXX) istället för
-       breda selektorer som `*`, `button`, `canvas`, `html,body`.
-       Originalets stil satte t.ex. cursor:none och stilar på
-       ALLA <button>/<canvas> i hela dokumentet — om Kanvas
-       kör flera rutor i samma DOM hade det förstört resten
-       av appen. Nu påverkas bara den här rutans egna element.
-
-    4) Alla #id-selektorer (#game, #hud, #score, ...) är
-       bytta mot klasser och slås upp via querySelector på
-       rutans egen root-container — inte document.getElementById.
-       Annars hade en andra kopia av samma script i samma DOM
-       returnerat samma element som den första kopian (id:n
-       måste vara unika i ett dokument).
-
-    5) Städning: en MutationObserver upptäcker om rutan tas
-       bort ur DOM:en och stoppar då animationsloopen
-       (cancelAnimationFrame) samt tar bort event-listeners,
-       så att en borttagen/stoppad ruta inte fortsätter rendera
-       i bakgrunden. Fungerar oavsett om Kanvas kör rutan i en
-       egen iframe eller i delad DOM.
-
-    6) Stäng-knappen försöker INTE längre stänga hela fliken
-       eller skriva över hela <body>. Den anropar bara den
-       lokala cleanup-funktionen, som tar bort rutans eget
-       innehåll. Om ni vill hooka in detta i Kanvas egna
-       "■ Stoppa"-knapp kan ni anropa:
-
-           rootEl.kanvasStop()
-
-       på det element som funktionen returnerar/monteras i —
-       se `mount()` längst ner.
-
-    7) Vapnet (drawWeapon) är omritat: metallslide med
-       gradient/highlights, slide som rör sig separat från
-       ramen vid rekyl (blowback-känsla), ejection port,
-       avtryckarbygel + avtryckare, bakre/främre sikte,
-       räfflor i slidens bakkant, magasinsbotten och mjuk
-       skugga under vapnet.
+    Samma grundstruktur som tidigare version behålls för allt som
+    INTE har med 3D att göra: mount/cleanup-mönster, scopead CSS
+    (ingen global läckage om flera Kanvas-rutor delar DOM), HUD,
+    ljudmotor (brus + oscillatorer via Web Audio), oändlig ammo,
+    och det kosmetiska omladdningsklicket.
 */
 
 (function () {
 
     /* ---------- MOUNT-PUNKT ---------- */
-    /*
-        Vet vi inte hur Kanvas kör rutan (egen iframe eller
-        delad DOM) så letar vi efter det egna <script>-taggens
-        förälder som mount-punkt om det går. Annars faller vi
-        tillbaka på document.body (fungerar fint om rutan körs
-        i en egen iframe, vilket verkar mest troligt utifrån
-        hur resten av det här scriptet redan var skrivet).
-    */
 
-    const scriptEl =
-        document.currentScript;
+    const scriptEl = document.currentScript;
 
     const mount =
         (scriptEl && scriptEl.parentElement) ||
         document.body;
 
-    // Unikt instans-id så flera kopior kan leva sida vid sida
-    const uid =
-        "sr" + Math.random().toString(36).slice(2, 9);
-
+    const uid = "sr" + Math.random().toString(36).slice(2, 9);
     const rootClass = "sr-app-" + uid;
 
-    // Om samma ruta av någon anledning körs igen på samma
-    // mount-punkt: städa bort den gamla instansen först.
     if (mount.__shootingRangeCleanup) {
         try {
             mount.__shootingRangeCleanup();
@@ -95,7 +54,7 @@
     }
 
 
-    /* ---------- STYLE (scopead, ingen global läckage) ---------- */
+    /* ---------- STYLE ---------- */
 
     const style = document.createElement("style");
     style.setAttribute("data-sr-instance", uid);
@@ -114,7 +73,7 @@
     justify-content: center;
     align-items: center;
     font-family: Arial, sans-serif;
-    background: #080a0c;
+    background: #05070a;
     outline: none;
 }
 
@@ -127,7 +86,7 @@
     border: 1px solid #303438;
     border-radius: 8px;
     box-shadow: 0 25px 80px rgba(0,0,0,.75);
-    background: #111;
+    background: #05070a;
 }
 
 .${rootClass} .sr-canvas {
@@ -192,23 +151,13 @@
     color: #ddd;
 }
 
-.${rootClass} .sr-score {
-    color: #d2e0c1 !important;
-}
-
-.${rootClass} .sr-combo {
-    color: #d9b865 !important;
-}
+.${rootClass} .sr-score { color: #d2e0c1 !important; }
+.${rootClass} .sr-combo { color: #d9b865 !important; }
 
 .${rootClass} .sr-ammo {
     font-size: 24px;
     font-weight: bold;
     color: #ddd;
-}
-
-.${rootClass} .sr-ammo span {
-    color: #656c70;
-    font-size: 14px;
 }
 
 .${rootClass} .sr-crosshair {
@@ -271,6 +220,17 @@
     color: #999;
 }
 
+.${rootClass} .sr-floattext {
+    position: absolute;
+    z-index: 25;
+    transform: translate(-50%, -50%);
+    font-weight: bold;
+    font-size: 20px;
+    pointer-events: none;
+    text-shadow: 0 2px 6px rgba(0,0,0,.6);
+    white-space: nowrap;
+}
+
 .${rootClass} .sr-menu {
     position: absolute;
     inset: 0;
@@ -278,7 +238,7 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    background: rgba(3,5,6,.84);
+    background: rgba(3,5,6,.72);
 }
 
 .${rootClass} .sr-card {
@@ -299,9 +259,7 @@
     letter-spacing: 4px;
 }
 
-.${rootClass} .sr-card h1 span {
-    color: #a9ba91;
-}
+.${rootClass} .sr-card h1 span { color: #a9ba91; }
 
 .${rootClass} .sr-card p {
     color: #858d91;
@@ -322,8 +280,12 @@
     cursor: pointer;
 }
 
-.${rootClass} .sr-btn:hover {
-    filter: brightness(1.15);
+.${rootClass} .sr-btn:hover { filter: brightness(1.15); }
+
+.${rootClass} .sr-btn:disabled {
+    opacity: .5;
+    cursor: default;
+    filter: none;
 }
 
 .${rootClass} .sr-close {
@@ -344,10 +306,7 @@
     cursor: pointer;
 }
 
-.${rootClass} .sr-close:hover {
-    background: #7b302b;
-    color: #fff;
-}
+.${rootClass} .sr-close:hover { background: #7b302b; color: #fff; }
 
 .${rootClass} .sr-controls {
     position: absolute;
@@ -360,182 +319,121 @@
     pointer-events: none;
 }
 
-.${rootClass} .sr-hidden {
-    display: none !important;
-}
+.${rootClass} .sr-hidden { display: none !important; }
 
 @media (max-width: 800px) {
-    .${rootClass} .sr-stat {
-        display: none;
-    }
-
-    .${rootClass} .sr-controls {
-        display: none;
-    }
+    .${rootClass} .sr-stat { display: none; }
+    .${rootClass} .sr-controls { display: none; }
 }
 `;
 
     document.head.appendChild(style);
 
 
-    /* ---------- ROT-CONTAINER ---------- */
+    /* ---------- DOM-STRUKTUR ---------- */
 
     const app = document.createElement("div");
     app.className = rootClass;
-    app.tabIndex = 0; // så vi kan fånga tangentbord lokalt utan document-listener
-
+    app.tabIndex = 0;
     mount.appendChild(app);
-
-
-    /* ---------- GAME CONTAINER (skapas FÖRE close-knappen!) ---------- */
 
     const game = document.createElement("div");
     game.className = "sr-game";
     app.appendChild(game);
-
-
-    /* ---------- CANVAS ---------- */
-
-    const canvas = document.createElement("canvas");
-    canvas.className = "sr-canvas";
-    game.appendChild(canvas);
-
-    const ctx = canvas.getContext("2d");
-
-    const WIDTH = 1100;
-    const HEIGHT = 700;
-
-
-    /* ---------- HUD ---------- */
 
     const hud = document.createElement("div");
     hud.className = "sr-hud";
 
     hud.innerHTML = `
 <div class="sr-hudLeft">
-
     <div class="sr-title">
         SHOOTING RANGE
-        <small>TRAINING FACILITY</small>
+        <small>3D TRAINING FACILITY</small>
     </div>
-
     <div class="sr-stat">
         <span>Poäng</span>
         <strong class="sr-score" data-role="score">0</strong>
     </div>
-
     <div class="sr-stat">
         <span>Träffar</span>
         <strong data-role="hits">0</strong>
     </div>
-
     <div class="sr-stat">
         <span>Precision</span>
         <strong data-role="accuracy">100%</strong>
     </div>
-
     <div class="sr-stat">
         <span>Combo</span>
         <strong class="sr-combo" data-role="combo">x1</strong>
     </div>
-
 </div>
-
 <div class="sr-hudRight">
-
     <div class="sr-stat">
         <span>Tid</span>
         <strong data-role="time">60</strong>
     </div>
-
     <div class="sr-ammo">
         <span data-role="ammo">∞</span>
     </div>
-
 </div>
 `;
 
     game.appendChild(hud);
-
-
-    /* ---------- CROSSHAIR ---------- */
 
     const crosshair = document.createElement("div");
     crosshair.className = "sr-crosshair";
     crosshair.innerHTML = `<div class="sr-crosshairDot"></div>`;
     game.appendChild(crosshair);
 
-
-    /* ---------- MESSAGE ---------- */
-
     const message = document.createElement("div");
     message.className = "sr-message";
-
     message.innerHTML = `
 <div class="sr-messageMain" data-role="messageMain"></div>
 <div class="sr-messageSub" data-role="messageSub"></div>
 `;
-
     game.appendChild(message);
 
-
-    /* ---------- CONTROLS ---------- */
+    const floatLayer = document.createElement("div");
+    floatLayer.style.position = "absolute";
+    floatLayer.style.inset = "0";
+    floatLayer.style.zIndex = "25";
+    floatLayer.style.pointerEvents = "none";
+    game.appendChild(floatLayer);
 
     const controls = document.createElement("div");
     controls.className = "sr-controls";
-
     controls.innerHTML = `
-MUS = SKJUT<br>
+MUS = SIKTA / SKJUT<br>
 R = LADDA OM<br>
 SPACE = NYTT MÅL
 `;
-
     game.appendChild(controls);
-
-
-    /* ---------- MENU ---------- */
 
     const menu = document.createElement("div");
     menu.className = "sr-menu";
-
     menu.innerHTML = `
 <div class="sr-card">
-
-    <h1>
-        SHOOTING
-        <span>RANGE</span>
-    </h1>
-
+    <h1>SHOOTING <span>RANGE</span></h1>
     <p data-role="menuText">
-        Testa din precision på en realistisk
-        inomhusbana. Träffa målen snabbt,
-        bygg combos och få högsta möjliga poäng.
+        Laddar 3D-motor …
     </p>
-
-    <button class="sr-btn" data-role="start">
+    <button class="sr-btn" data-role="start" disabled>
         STARTA
     </button>
-
 </div>
 `;
-
     game.appendChild(menu);
-
-
-    /* ---------- CLOSE-KNAPP (skapas EFTER game finns) ---------- */
 
     const closeButton = document.createElement("button");
     closeButton.className = "sr-close";
     closeButton.textContent = "×";
-
     closeButton.addEventListener("click", function () {
         cleanup();
     });
-
     game.appendChild(closeButton);
 
 
-    /* ---------- ELEMENT-REFERENSER (scopeade till app, inte document) ---------- */
+    /* ---------- ELEMENT-REFERENSER ---------- */
 
     const startButton = menu.querySelector('[data-role="start"]');
     const menuText = menu.querySelector('[data-role="menuText"]');
@@ -550,10 +448,11 @@ SPACE = NYTT MÅL
     const messageSub = message.querySelector('[data-role="messageSub"]');
 
 
-    /* ---------- GAME VARIABLES ---------- */
+    /* ---------- SPELVARIABLER ---------- */
 
     let running = false;
     let destroyed = false;
+    let threeReady = false;
 
     let score = 0;
     let hits = 0;
@@ -563,194 +462,106 @@ SPACE = NYTT MÅL
 
     let timeLeft = 60;
 
-    let mouseX = 550;
-    let mouseY = 350;
-
-    let recoil = 0;      // 0..1, styr slide + muzzle flash
-    let muzzleFlash = 0;
-    let shake = 0;
-
     let spawnTimer = 0;
     let reloadCooldown = 0;
+    let reloadDip = 0;
 
     let lastFrame = 0;
     let rafId = null;
 
+    let messageTimer = null;
+
+    // Musposition i "normaliserade enhetskoordinater" (-1..1),
+    // det format Three.js raycaster vill ha för sikte.
+    const mouseNDC = { x: 0, y: 0 };
+
     let targets = [];
-    let particles = [];
     let shells = [];
     let floatingTexts = [];
-    let bulletHoles = [];
+
+
+    /* ---------- AUDIO (oförändrad ljudmotor) ---------- */
 
     let audioContext;
     let noiseBuffer = null;
 
-    let messageTimer = null;
-
-
-    /* ---------- AUDIO ---------- */
-    /*
-        Enkla oscillator-toner (sinus/sågtand) låter aldrig som ett
-        riktigt skott — ett riktigt skott är i grunden BRUS (ett
-        knall/crack) plus en kort lågfrekvent "kick" i bröstet, inte
-        en ren ton. Därför genereras här en kort brusbuffert en gång
-        (istället för en massa oscillatorer) och formas sedan med
-        filter + snabb volym-envelope för olika ljud:
-
-        - playGunshot(): brus genom ett bandpass/highpass-filter för
-          den knastriga smällen + en kort lågfrekvent sinus-"kick"
-          för tryckvågskänslan, plus en svag efterklang (rumsstudsar).
-        - playHit(): två lätt feldetonerade toner som klingar av
-          snabbt, för en metallisk "ring" som en stålplåt/target.
-        - playMechClick(): två korta, mycket kort filtrerade
-          brusklick efter varandra — simulerar slidens/magasinets
-          mekaniska ljud vid en (kosmetisk) omladdning.
-    */
-
     function getAudioContext() {
-
         if (!audioContext) {
             audioContext =
                 new (window.AudioContext || window.webkitAudioContext)();
         }
-
         return audioContext;
     }
 
     function getNoiseBuffer(ctxA) {
-
         if (noiseBuffer) return noiseBuffer;
-
         const length = ctxA.sampleRate * 0.5;
         const buffer = ctxA.createBuffer(1, length, ctxA.sampleRate);
         const data = buffer.getChannelData(0);
-
         for (let i = 0; i < length; i++) {
             data[i] = Math.random() * 2 - 1;
         }
-
         noiseBuffer = buffer;
-
         return noiseBuffer;
     }
 
-    // Kvar för bakåtkompatibilitet / enstaka enkla toner
-    function sound(frequency, duration, type, volume) {
-
-        try {
-
-            const ctxA = getAudioContext();
-
-            const oscillator = ctxA.createOscillator();
-            const gain = ctxA.createGain();
-
-            oscillator.type = type || "sine";
-            oscillator.frequency.value = frequency;
-            gain.gain.value = volume || .03;
-
-            oscillator.connect(gain);
-            gain.connect(ctxA.destination);
-
-            oscillator.start();
-
-            gain.gain.exponentialRampToValueAtTime(
-                .001,
-                ctxA.currentTime + duration
-            );
-
-            oscillator.stop(ctxA.currentTime + duration);
-
-        } catch (error) {
-        }
-    }
-
-
     function playGunshot() {
-
         try {
-
             const ctxA = getAudioContext();
             const now = ctxA.currentTime;
 
-
-            /* --- Brus-"crack" (den knastriga smällen) --- */
-
             const crackSource = ctxA.createBufferSource();
             crackSource.buffer = getNoiseBuffer(ctxA);
-
             const crackFilter = ctxA.createBiquadFilter();
             crackFilter.type = "bandpass";
             crackFilter.frequency.value = 1800;
             crackFilter.Q.value = 0.6;
-
             const crackGain = ctxA.createGain();
             crackGain.gain.setValueAtTime(.5, now);
             crackGain.gain.exponentialRampToValueAtTime(.001, now + .09);
-
             crackSource.connect(crackFilter);
             crackFilter.connect(crackGain);
             crackGain.connect(ctxA.destination);
-
             crackSource.start(now);
             crackSource.stop(now + .1);
-
-
-            /* --- Hög, kort "snap" ovanpå bruset (transient) --- */
 
             const snapFilter = ctxA.createBiquadFilter();
             snapFilter.type = "highpass";
             snapFilter.frequency.value = 3500;
-
             const snapGain = ctxA.createGain();
             snapGain.gain.setValueAtTime(.35, now);
             snapGain.gain.exponentialRampToValueAtTime(.001, now + .035);
-
             const snapSource = ctxA.createBufferSource();
             snapSource.buffer = getNoiseBuffer(ctxA);
-
             snapSource.connect(snapFilter);
             snapFilter.connect(snapGain);
             snapGain.connect(ctxA.destination);
-
             snapSource.start(now);
             snapSource.stop(now + .04);
-
-
-            /* --- Låg "kick" (tryckvåg/bröst-känsla) --- */
 
             const kick = ctxA.createOscillator();
             kick.type = "sine";
             kick.frequency.setValueAtTime(150, now);
             kick.frequency.exponentialRampToValueAtTime(45, now + .08);
-
             const kickGain = ctxA.createGain();
             kickGain.gain.setValueAtTime(.6, now);
             kickGain.gain.exponentialRampToValueAtTime(.001, now + .12);
-
             kick.connect(kickGain);
             kickGain.connect(ctxA.destination);
-
             kick.start(now);
             kick.stop(now + .13);
 
-
-            /* --- Svag efterklang (rumsstuds, ger djup) --- */
-
             const tailSource = ctxA.createBufferSource();
             tailSource.buffer = getNoiseBuffer(ctxA);
-
             const tailFilter = ctxA.createBiquadFilter();
             tailFilter.type = "lowpass";
             tailFilter.frequency.value = 900;
-
             const tailGain = ctxA.createGain();
             tailGain.gain.setValueAtTime(.08, now + .03);
             tailGain.gain.exponentialRampToValueAtTime(.001, now + .3);
-
             tailSource.connect(tailFilter);
             tailFilter.connect(tailGain);
             tailGain.connect(ctxA.destination);
-
             tailSource.start(now + .03);
             tailSource.stop(now + .32);
 
@@ -758,52 +569,37 @@ SPACE = NYTT MÅL
         }
     }
 
-
     function playHit() {
-
         try {
-
             const ctxA = getAudioContext();
             const now = ctxA.currentTime;
-
-            // Två lätt feldetonerade toner = metallisk "ring",
-            // som en kula som träffar en stålplatta.
             const freqs = [1400, 1660];
 
             for (const f of freqs) {
-
                 const osc = ctxA.createOscillator();
                 osc.type = "triangle";
                 osc.frequency.setValueAtTime(f, now);
                 osc.frequency.exponentialRampToValueAtTime(f * 0.85, now + .18);
-
                 const gain = ctxA.createGain();
                 gain.gain.setValueAtTime(.05, now);
                 gain.gain.exponentialRampToValueAtTime(.001, now + .2);
-
                 osc.connect(gain);
                 gain.connect(ctxA.destination);
-
                 osc.start(now);
                 osc.stop(now + .22);
             }
 
-            // Kort brusknäpp i attacken för lite metallisk "grus"
             const noise = ctxA.createBufferSource();
             noise.buffer = getNoiseBuffer(ctxA);
-
             const noiseFilter = ctxA.createBiquadFilter();
             noiseFilter.type = "highpass";
             noiseFilter.frequency.value = 4000;
-
             const noiseGain = ctxA.createGain();
             noiseGain.gain.setValueAtTime(.06, now);
             noiseGain.gain.exponentialRampToValueAtTime(.001, now + .03);
-
             noise.connect(noiseFilter);
             noiseFilter.connect(noiseGain);
             noiseGain.connect(ctxA.destination);
-
             noise.start(now);
             noise.stop(now + .04);
 
@@ -811,49 +607,925 @@ SPACE = NYTT MÅL
         }
     }
 
-
     function playMechClick() {
-
         try {
-
             const ctxA = getAudioContext();
             const now = ctxA.currentTime;
-
-            // Två korta klick efter varandra: magasin/slid-känsla
             const clicks = [0, .09];
 
             for (const delay of clicks) {
-
                 const clickSource = ctxA.createBufferSource();
                 clickSource.buffer = getNoiseBuffer(ctxA);
-
                 const clickFilter = ctxA.createBiquadFilter();
                 clickFilter.type = "bandpass";
                 clickFilter.frequency.value = 2600;
                 clickFilter.Q.value = 1.2;
-
                 const clickGain = ctxA.createGain();
                 clickGain.gain.setValueAtTime(.4, now + delay);
                 clickGain.gain.exponentialRampToValueAtTime(.001, now + delay + .025);
-
                 clickSource.connect(clickFilter);
                 clickFilter.connect(clickGain);
                 clickGain.connect(ctxA.destination);
-
                 clickSource.start(now + delay);
                 clickSource.stop(now + delay + .03);
             }
-
         } catch (error) {
         }
     }
 
 
-    /* ---------- START ---------- */
+    /* ---------- MESSAGE / HUD ---------- */
+
+    function setMessage(main, sub, color) {
+        messageMain.textContent = main;
+        messageSub.textContent = sub;
+        messageMain.style.color = color;
+        message.style.opacity = "1";
+        clearTimeout(messageTimer);
+        messageTimer = setTimeout(function () {
+            message.style.opacity = "0";
+        }, 600);
+    }
+
+    function updateHUD() {
+        scoreElement.textContent = score.toLocaleString("sv-SE");
+        hitsElement.textContent = hits;
+        const accuracy = shots === 0 ? 100 : Math.round(hits / shots * 100);
+        accuracyElement.textContent = accuracy + "%";
+        comboElement.textContent = "x" + Math.max(1, combo);
+        timeElement.textContent = Math.max(0, timeLeft).toFixed(1);
+    }
+
+
+    /* =========================================================
+       ALLT NEDANFÖR KRÄVER THREE.JS — laddas asynkront
+       ========================================================= */
+
+    let THREE = null;
+
+    let renderer = null;
+    let scene = null;
+    let camera = null;
+    let cameraBaseEuler = null;
+    let raycaster = null;
+
+    let weaponGroup = null;
+    let slideMesh = null;
+    let slideBaseZ = 0;
+    let muzzleLight = null;
+    let muzzleSprite = null;
+    let weaponBasePos = null;
+    let weaponBaseRot = null;
+
+    let recoilKick = 0;      // hela vapnets rekyl (0..1, avtar)
+    let slideRecoilKick = 0; // sliden separat, avtar snabbare
+    let muzzleFlash = 0;
+    let shakeAmount = 0;
+
+    let aimYaw = 0;
+    let aimPitch = 0;
+    let idleT = 0;
+
+    let resizeObserver = null;
+    let mutationObserver = null;
+
+    const ROOM_HALF_WIDTH = 6;
+    const TARGET_MIN_Z = -8;
+    const TARGET_MAX_Z = -20;
+
+
+    function loadThree() {
+        return new Promise(function (resolve, reject) {
+
+            if (window.THREE) {
+                resolve(window.THREE);
+                return;
+            }
+
+            const script = document.createElement("script");
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
+
+            script.onload = function () {
+                resolve(window.THREE);
+            };
+
+            script.onerror = function () {
+                reject(new Error("Three.js kunde inte laddas (ingen internetanslutning?)"));
+            };
+
+            document.head.appendChild(script);
+        });
+    }
+
+
+    /* ---------- TEXTURER (genereras med vanlig 2D-canvas) ---------- */
+
+    function makeTargetTexture() {
+
+        const w = 200;
+        const h = 300;
+
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+
+        const tctx = c.getContext("2d");
+
+        tctx.fillStyle = "#d5d0c2";
+        tctx.fillRect(0, 0, w, h);
+
+        // Siluett
+        tctx.fillStyle = "#171819";
+        tctx.beginPath();
+        tctx.arc(w / 2, h * .27, w * .13, 0, Math.PI * 2);
+        tctx.fill();
+
+        tctx.beginPath();
+        tctx.moveTo(w * .38, h * .42);
+        tctx.quadraticCurveTo(w * .28, h * .62, w * .34, h * .92);
+        tctx.lineTo(w * .66, h * .92);
+        tctx.quadraticCurveTo(w * .72, h * .62, w * .62, h * .42);
+        tctx.closePath();
+        tctx.fill();
+
+        // Ringar
+        const rings = [
+            [.42, "#d5d0c2"],
+            [.33, "#171819"],
+            [.23, "#c3bcad"],
+            [.13, "#18191a"],
+            [.06, "#9c4d42"]
+        ];
+
+        for (const ring of rings) {
+            tctx.strokeStyle = ring[1];
+            tctx.lineWidth = 3;
+            tctx.beginPath();
+            tctx.ellipse(w / 2, h * .5, w * ring[0], w * ring[0] * 1.15, 0, 0, Math.PI * 2);
+            tctx.stroke();
+        }
+
+        const texture = new THREE.CanvasTexture(c);
+        texture.needsUpdate = true;
+
+        return { canvas: c, ctx: tctx, texture: texture, width: w, height: h };
+    }
+
+    function makeGripTexture() {
+
+        const w = 64;
+        const h = 64;
+
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+
+        const gctx = c.getContext("2d");
+
+        gctx.fillStyle = "#141516";
+        gctx.fillRect(0, 0, w, h);
+
+        gctx.strokeStyle = "rgba(70,74,74,.9)";
+        gctx.lineWidth = 1;
+
+        for (let d = -w; d < w * 2; d += 6) {
+            gctx.beginPath();
+            gctx.moveTo(d, 0);
+            gctx.lineTo(d + h, h);
+            gctx.stroke();
+
+            gctx.beginPath();
+            gctx.moveTo(w - d, 0);
+            gctx.lineTo(w - d - h, h);
+            gctx.stroke();
+        }
+
+        const texture = new THREE.CanvasTexture(c);
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(2, 3);
+        texture.needsUpdate = true;
+
+        return texture;
+    }
+
+    function makeFlareTexture() {
+
+        const size = 128;
+        const c = document.createElement("canvas");
+        c.width = size;
+        c.height = size;
+
+        const fctx = c.getContext("2d");
+
+        const gradient = fctx.createRadialGradient(
+            size / 2, size / 2, 0,
+            size / 2, size / 2, size / 2
+        );
+
+        gradient.addColorStop(0, "rgba(255,255,240,1)");
+        gradient.addColorStop(.25, "rgba(255,200,90,.9)");
+        gradient.addColorStop(1, "rgba(255,90,20,0)");
+
+        fctx.fillStyle = gradient;
+        fctx.fillRect(0, 0, size, size);
+
+        const texture = new THREE.CanvasTexture(c);
+        texture.needsUpdate = true;
+
+        return texture;
+    }
+
+
+    /* ---------- SCEN, RUM & LJUS ---------- */
+
+    function buildRoom() {
+
+        const floorMat = new THREE.MeshStandardMaterial({
+            color: 0x4a3f2f,
+            roughness: 0.95,
+            metalness: 0
+        });
+
+        const floor = new THREE.Mesh(
+            new THREE.PlaneGeometry(ROOM_HALF_WIDTH * 2 + 4, 34),
+            floorMat
+        );
+
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set(0, 0, -12);
+        scene.add(floor);
+
+        const wallMat = new THREE.MeshStandardMaterial({
+            color: 0x1c1712,
+            roughness: 1,
+            metalness: 0
+        });
+
+        const backWall = new THREE.Mesh(
+            new THREE.PlaneGeometry(ROOM_HALF_WIDTH * 2 + 4, 9),
+            wallMat
+        );
+        backWall.position.set(0, 4, -23);
+        scene.add(backWall);
+
+        const sideMat = new THREE.MeshStandardMaterial({
+            color: 0x241d16,
+            roughness: 1,
+            metalness: 0
+        });
+
+        const leftWall = new THREE.Mesh(
+            new THREE.PlaneGeometry(34, 9),
+            sideMat
+        );
+        leftWall.rotation.y = Math.PI / 2;
+        leftWall.position.set(-ROOM_HALF_WIDTH - 2, 4, -8);
+        scene.add(leftWall);
+
+        const rightWall = new THREE.Mesh(
+            new THREE.PlaneGeometry(34, 9),
+            sideMat
+        );
+        rightWall.rotation.y = -Math.PI / 2;
+        rightWall.position.set(ROOM_HALF_WIDTH + 2, 4, -8);
+        scene.add(rightWall);
+
+        const ceiling = new THREE.Mesh(
+            new THREE.PlaneGeometry(ROOM_HALF_WIDTH * 2 + 4, 34),
+            new THREE.MeshStandardMaterial({ color: 0x0e0f10, roughness: 1 })
+        );
+        ceiling.rotation.x = Math.PI / 2;
+        ceiling.position.set(0, 8.2, -12);
+        scene.add(ceiling);
+
+        // Taklampor + punktljus, utplacerade längs banan
+        const lampMat = new THREE.MeshBasicMaterial({ color: 0xfff2cf });
+
+        for (let i = 0; i < 5; i++) {
+
+            const z = -3 - i * 5;
+
+            const lamp = new THREE.Mesh(
+                new THREE.BoxGeometry(1.4, 0.08, 0.5),
+                lampMat
+            );
+            lamp.position.set(0, 8, z);
+            scene.add(lamp);
+
+            const light = new THREE.PointLight(0xffe6b0, 1.1, 14, 2);
+            light.position.set(0, 7.6, z);
+            scene.add(light);
+        }
+
+        // Avståndsmarkeringar på sidoväggen
+        const distances = [
+            [10, -8], [15, -11], [20, -14], [25, -17], [30, -20]
+        ];
+
+        for (const d of distances) {
+
+            const labelCanvas = document.createElement("canvas");
+            labelCanvas.width = 128;
+            labelCanvas.height = 64;
+
+            const lctx = labelCanvas.getContext("2d");
+            lctx.fillStyle = "rgba(220,210,190,.55)";
+            lctx.font = "bold 40px Arial";
+            lctx.textAlign = "center";
+            lctx.textBaseline = "middle";
+            lctx.fillText(String(d[0]), 64, 34);
+
+            const labelTexture = new THREE.CanvasTexture(labelCanvas);
+
+            const labelSprite = new THREE.Sprite(
+                new THREE.SpriteMaterial({ map: labelTexture, transparent: true })
+            );
+
+            labelSprite.position.set(-ROOM_HALF_WIDTH - 1.85, 3.2, d[1]);
+            labelSprite.scale.set(1.4, 0.7, 1);
+            scene.add(labelSprite);
+        }
+
+        // Svag omgivningsbelysning + riktat ljus för mjuka skuggor i färgen
+        scene.add(new THREE.HemisphereLight(0x4a4438, 0x0a0908, 0.55));
+
+        const keyLight = new THREE.DirectionalLight(0xfff4e0, 0.35);
+        keyLight.position.set(2, 6, 6);
+        scene.add(keyLight);
+    }
+
+
+    /* ---------- VAPEN (3D-modell i kamerans "hand") ---------- */
+
+    function buildWeapon() {
+
+        weaponGroup = new THREE.Group();
+
+        weaponBasePos = new THREE.Vector3(0.34, -0.34, -0.72);
+        weaponBaseRot = new THREE.Euler(0, Math.PI * 0.045, -0.02);
+
+        weaponGroup.position.copy(weaponBasePos);
+        weaponGroup.rotation.copy(weaponBaseRot);
+
+        camera.add(weaponGroup);
+        scene.add(camera);
+
+
+        const gripTexture = makeGripTexture();
+
+        const gripMat = new THREE.MeshStandardMaterial({
+            color: 0x1a1b1c,
+            roughness: 0.85,
+            metalness: 0.05,
+            map: gripTexture
+        });
+
+        const slideMat = new THREE.MeshStandardMaterial({
+            color: 0x2c2e30,
+            roughness: 0.3,
+            metalness: 0.85
+        });
+
+        const darkMetal = new THREE.MeshStandardMaterial({
+            color: 0x0c0d0e,
+            roughness: 0.4,
+            metalness: 0.7
+        });
+
+
+        /* Grip/ram */
+
+        const grip = new THREE.Mesh(
+            new THREE.BoxGeometry(0.085, 0.16, 0.055),
+            gripMat
+        );
+        grip.position.set(0, -0.09, 0.02);
+        grip.rotation.x = 0.12;
+        weaponGroup.add(grip);
+
+        /* Avtryckarbygel */
+
+        const guard = new THREE.Mesh(
+            new THREE.TorusGeometry(0.035, 0.006, 8, 16, Math.PI * 1.3),
+            darkMetal
+        );
+        guard.position.set(0, -0.015, 0.06);
+        guard.rotation.z = Math.PI;
+        guard.rotation.y = Math.PI / 2;
+        weaponGroup.add(guard);
+
+        /* Avtryckare */
+
+        const trigger = new THREE.Mesh(
+            new THREE.BoxGeometry(0.006, 0.03, 0.012),
+            darkMetal
+        );
+        trigger.position.set(0, -0.02, 0.065);
+        weaponGroup.add(trigger);
+
+        /* Ram framtill (dust cover) */
+
+        const dustCover = new THREE.Mesh(
+            new THREE.BoxGeometry(0.05, 0.03, 0.1),
+            darkMetal
+        );
+        dustCover.position.set(0, 0.005, 0.09);
+        weaponGroup.add(dustCover);
+
+
+        /* --- Slide (rör sig separat vid rekyl) --- */
+
+        slideMesh = new THREE.Group();
+        slideBaseZ = 0;
+        slideMesh.position.set(0, 0.035, 0.02);
+        weaponGroup.add(slideMesh);
+
+        const slideBody = new THREE.Mesh(
+            new THREE.BoxGeometry(0.075, 0.05, 0.22),
+            slideMat
+        );
+        slideBody.position.set(0, 0, 0);
+        slideMesh.add(slideBody);
+
+        // Räfflor bak på sliden
+        for (let i = 0; i < 6; i++) {
+            const groove = new THREE.Mesh(
+                new THREE.BoxGeometry(0.077, 0.052, 0.004),
+                darkMetal
+            );
+            groove.position.set(0, 0, -0.07 + i * 0.009);
+            slideMesh.add(groove);
+        }
+
+        // Pipa
+        const barrel = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.011, 0.011, 0.09, 14),
+            darkMetal
+        );
+        barrel.rotation.x = Math.PI / 2;
+        barrel.position.set(0, 0, 0.14);
+        slideMesh.add(barrel);
+
+        // Bakre sikte
+        const rearSight = new THREE.Mesh(
+            new THREE.BoxGeometry(0.02, 0.014, 0.012),
+            darkMetal
+        );
+        rearSight.position.set(0, 0.032, -0.09);
+        slideMesh.add(rearSight);
+
+        // Främre sikte med vit prick
+        const frontSight = new THREE.Mesh(
+            new THREE.BoxGeometry(0.007, 0.018, 0.007),
+            darkMetal
+        );
+        frontSight.position.set(0, 0.032, 0.175);
+        slideMesh.add(frontSight);
+
+        const frontSightDot = new THREE.Mesh(
+            new THREE.SphereGeometry(0.0025, 6, 6),
+            new THREE.MeshBasicMaterial({ color: 0xdcd48a })
+        );
+        frontSightDot.position.set(0, 0.034, 0.178);
+        slideMesh.add(frontSightDot);
+
+        // Hane
+        const hammer = new THREE.Mesh(
+            new THREE.SphereGeometry(0.012, 8, 8),
+            darkMetal
+        );
+        hammer.position.set(0, 0.01, -0.115);
+        slideMesh.add(hammer);
+
+
+        /* --- Mynningsflamma --- */
+
+        muzzleLight = new THREE.PointLight(0xffcc66, 0, 4, 2);
+        muzzleLight.position.set(0, 0, 0.19);
+        slideMesh.add(muzzleLight);
+
+        const flareTexture = makeFlareTexture();
+
+        muzzleSprite = new THREE.Sprite(
+            new THREE.SpriteMaterial({
+                map: flareTexture,
+                transparent: true,
+                opacity: 0,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            })
+        );
+        muzzleSprite.position.set(0, 0, 0.2);
+        muzzleSprite.scale.set(0.16, 0.16, 1);
+        slideMesh.add(muzzleSprite);
+    }
+
+
+    /* ---------- MÅL ---------- */
+
+    function createTargetEntry() {
+
+        const t = makeTargetTexture();
+
+        const material = new THREE.MeshStandardMaterial({
+            map: t.texture,
+            roughness: 0.85,
+            metalness: 0
+        });
+
+        const geometry = new THREE.PlaneGeometry(0.9, 1.35);
+
+        const mesh = new THREE.Mesh(geometry, material);
+
+        const x = (Math.random() * 2 - 1) * (ROOM_HALF_WIDTH - 1.4);
+        const y = 1.0 + Math.random() * 1.1;
+        const z = TARGET_MIN_Z + Math.random() * (TARGET_MAX_Z - TARGET_MIN_Z);
+
+        mesh.position.set(x, y, z);
+
+        const scale = 0.75 + Math.random() * 0.55;
+        mesh.scale.setScalar(scale);
+
+        scene.add(mesh);
+
+        return {
+            mesh: mesh,
+            geometry: geometry,
+            material: material,
+            texture: t.texture,
+            canvas: t.canvas,
+            ctx: t.ctx,
+            texW: t.width,
+            texH: t.height,
+            life: 0,
+            maxLife: 3.5 + Math.random() * 2.2,
+            moving: Math.random() < 0.3,
+            direction: Math.random() < 0.5 ? -1 : 1,
+            speed: 0.4 + Math.random() * 0.6
+        };
+    }
+
+    function disposeTarget(entry) {
+        scene.remove(entry.mesh);
+        entry.geometry.dispose();
+        entry.material.dispose();
+        entry.texture.dispose();
+    }
+
+    function spawnTarget() {
+        if (!threeReady) return;
+        targets.push(createTargetEntry());
+    }
+
+    function updateTargets(dt) {
+
+        for (let i = targets.length - 1; i >= 0; i--) {
+
+            const t = targets[i];
+            t.life += dt;
+
+            if (t.moving) {
+
+                t.mesh.position.x += t.speed * t.direction * dt;
+
+                const limit = ROOM_HALF_WIDTH - 1.4;
+
+                if (t.mesh.position.x > limit || t.mesh.position.x < -limit) {
+                    t.direction *= -1;
+                }
+            }
+
+            if (t.life > t.maxLife) {
+                disposeTarget(t);
+                targets.splice(i, 1);
+                combo = 0;
+            }
+        }
+    }
+
+
+    /* ---------- TOMHYLSOR ---------- */
+
+    function ejectShell() {
+
+        const geometry = new THREE.CylinderGeometry(0.006, 0.006, 0.02, 8);
+        const material = new THREE.MeshStandardMaterial({
+            color: 0xb58c4d,
+            metalness: 0.8,
+            roughness: 0.35
+        });
+
+        const mesh = new THREE.Mesh(geometry, material);
+
+        const worldPos = new THREE.Vector3();
+        slideMesh.getWorldPosition(worldPos);
+        worldPos.x += 0.05;
+
+        mesh.position.copy(worldPos);
+        scene.add(mesh);
+
+        shells.push({
+            mesh: mesh,
+            geometry: geometry,
+            material: material,
+            velocity: new THREE.Vector3(
+                0.6 + Math.random() * 0.5,
+                1.4 + Math.random() * 0.5,
+                -0.3 + Math.random() * 0.4
+            ),
+            spin: new THREE.Vector3(
+                Math.random() * 8,
+                Math.random() * 8,
+                Math.random() * 8
+            ),
+            life: 2.2
+        });
+    }
+
+    function updateShells(dt) {
+
+        for (let i = shells.length - 1; i >= 0; i--) {
+
+            const s = shells[i];
+
+            s.life -= dt;
+            s.velocity.y -= 2.6 * dt;
+
+            s.mesh.position.x += s.velocity.x * dt;
+            s.mesh.position.y += s.velocity.y * dt;
+            s.mesh.position.z += s.velocity.z * dt;
+
+            s.mesh.rotation.x += s.spin.x * dt;
+            s.mesh.rotation.y += s.spin.y * dt;
+
+            if (s.life <= 0 || s.mesh.position.y < -0.3) {
+                scene.remove(s.mesh);
+                s.geometry.dispose();
+                s.material.dispose();
+                shells.splice(i, 1);
+            }
+        }
+    }
+
+
+    /* ---------- FLYTANDE TEXT (DOM ovanpå 3D-scenen) ---------- */
+
+    function floatingText(text, worldPos, color) {
+
+        const el = document.createElement("div");
+        el.className = "sr-floattext";
+        el.textContent = text;
+        el.style.color = color;
+        floatLayer.appendChild(el);
+
+        floatingTexts.push({
+            el: el,
+            pos: worldPos.clone(),
+            life: 1
+        });
+    }
+
+    function updateFloatingTexts(dt) {
+
+        const rect = game.getBoundingClientRect();
+        const projected = new THREE.Vector3();
+
+        for (let i = floatingTexts.length - 1; i >= 0; i--) {
+
+            const f = floatingTexts[i];
+
+            f.life -= dt;
+            f.pos.y += dt * 0.5;
+
+            if (f.life <= 0) {
+                f.el.remove();
+                floatingTexts.splice(i, 1);
+                continue;
+            }
+
+            projected.copy(f.pos).project(camera);
+
+            const x = (projected.x * 0.5 + 0.5) * rect.width;
+            const y = (1 - (projected.y * 0.5 + 0.5)) * rect.height;
+
+            f.el.style.left = x + "px";
+            f.el.style.top = y + "px";
+            f.el.style.opacity = String(Math.min(1, f.life * 2));
+        }
+    }
+
+
+    /* ---------- VAPEN-UPPDATERING (sway, rekyl, mynningsflamma) ---------- */
+
+    function updateWeapon(dt) {
+
+        // Siktet styr en liten svängning av vapnet, med eftersläpning
+        // (lerp) så det känns levande och inte som ett stelt hopp.
+        const targetYaw = -mouseNDC.x * 0.11;
+        const targetPitch = mouseNDC.y * 0.07;
+
+        const followSpeed = 1 - Math.pow(0.0006, dt);
+
+        aimYaw += (targetYaw - aimYaw) * followSpeed;
+        aimPitch += (targetPitch - aimPitch) * followSpeed;
+
+        idleT += dt;
+
+        const idleX = Math.sin(idleT * 0.9) * 0.0035;
+        const idleY = Math.sin(idleT * 1.6) * 0.004 + Math.abs(Math.sin(idleT * 0.8)) * 0.001;
+
+        recoilKick *= Math.pow(0.015, dt * 6);
+        slideRecoilKick *= Math.pow(0.01, dt * 8);
+        reloadDip *= Math.pow(0.02, dt * 5);
+
+        weaponGroup.rotation.set(
+            weaponBaseRot.x + aimPitch - recoilKick * 0.12 - reloadDip * 0.25,
+            weaponBaseRot.y + aimYaw,
+            weaponBaseRot.z
+        );
+
+        weaponGroup.position.set(
+            weaponBasePos.x + idleX,
+            weaponBasePos.y + idleY + recoilKick * 0.012 - reloadDip * 0.03,
+            weaponBasePos.z + recoilKick * 0.05
+        );
+
+        slideMesh.position.z = 0.02 + slideRecoilKick * 0.045;
+
+        muzzleFlash -= dt * 9;
+
+        const flashVisible = Math.max(0, muzzleFlash);
+        muzzleLight.intensity = flashVisible * 3.2;
+        muzzleSprite.material.opacity = flashVisible;
+        muzzleSprite.scale.setScalar(0.14 + (1 - flashVisible) * 0.05);
+    }
+
+
+    /* ---------- SKJUTA / TRÄFFA ---------- */
+
+    function shoot() {
+
+        if (!running || !threeReady) return;
+
+        shots++;
+
+        recoilKick = 1;
+        slideRecoilKick = 1;
+        muzzleFlash = 1;
+        shakeAmount = 1;
+
+        playGunshot();
+        ejectShell();
+
+        raycaster.setFromCamera(mouseNDC, camera);
+
+        const meshes = targets.map(function (t) { return t.mesh; });
+        const intersections = raycaster.intersectObjects(meshes);
+
+        if (intersections.length > 0) {
+
+            const hitMesh = intersections[0].object;
+            const uv = intersections[0].uv;
+
+            const entryIndex = targets.findIndex(function (t) {
+                return t.mesh === hitMesh;
+            });
+
+            if (entryIndex !== -1) {
+                hit(targets[entryIndex], entryIndex, uv);
+            }
+
+        } else {
+
+            combo = 0;
+
+            const missPoint = new THREE.Vector3(
+                mouseNDC.x * 6,
+                1.5 + mouseNDC.y * 3,
+                -10
+            );
+
+            floatingText("MISS", missPoint, "#a76c62");
+        }
+
+        updateHUD();
+    }
+
+    function hit(entry, index, uv) {
+
+        hits++;
+        combo++;
+        bestCombo = Math.max(bestCombo, combo);
+
+        const points = 100 + combo * 10;
+        score += points;
+
+        if (uv) {
+
+            const px = uv.x * entry.texW;
+            const py = (1 - uv.y) * entry.texH;
+
+            entry.ctx.fillStyle = "#111";
+            entry.ctx.beginPath();
+            entry.ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+            entry.ctx.fill();
+
+            entry.texture.needsUpdate = true;
+        }
+
+        const worldPos = new THREE.Vector3();
+        entry.mesh.getWorldPosition(worldPos);
+
+        floatingText(
+            "+" + points,
+            worldPos,
+            combo >= 5 ? "#e3bd63" : "#d3e3c0"
+        );
+
+        playHit();
+
+        disposeTarget(entry);
+        targets.splice(index, 1);
+    }
+
+
+    /* ---------- OMLADDNING (kosmetisk, ammo är oändlig) ---------- */
+
+    function reload() {
+
+        if (reloadCooldown > 0) return;
+
+        reloadCooldown = 1.1;
+        reloadDip = 1;
+
+        setMessage("TAKTISK OMLADDNING", "", "#ccc");
+        playMechClick();
+    }
+
+
+    /* ---------- START / SLUT ---------- */
+
+    function disposeMaterial(material) {
+
+        if (!material) return;
+
+        const materials = Array.isArray(material) ? material : [material];
+
+        for (const m of materials) {
+
+            for (const key of ["map", "normalMap", "roughnessMap", "metalnessMap"]) {
+                if (m[key] && m[key].dispose) {
+                    m[key].dispose();
+                }
+            }
+
+            m.dispose();
+        }
+    }
+
+    function disposeObject3D(root) {
+
+        if (!root) return;
+
+        root.traverse(function (obj) {
+
+            if (obj.geometry) {
+                obj.geometry.dispose();
+            }
+
+            if (obj.material) {
+                disposeMaterial(obj.material);
+            }
+        });
+    }
+
+    function resetSceneObjects() {
+
+        for (const t of targets) disposeTarget(t);
+        targets = [];
+
+        for (const s of shells) {
+            scene.remove(s.mesh);
+            s.geometry.dispose();
+            s.material.dispose();
+        }
+        shells = [];
+
+        for (const f of floatingTexts) f.el.remove();
+        floatingTexts = [];
+
+        recoilKick = 0;
+        slideRecoilKick = 0;
+        muzzleFlash = 0;
+        shakeAmount = 0;
+        reloadDip = 0;
+        reloadCooldown = 0;
+    }
 
     function startGame() {
 
-        if (destroyed) return;
+        if (!threeReady || destroyed) return;
 
         running = true;
 
@@ -862,32 +1534,17 @@ SPACE = NYTT MÅL
         shots = 0;
         combo = 0;
         bestCombo = 0;
-
         timeLeft = 60;
 
-        recoil = 0;
-        muzzleFlash = 0;
-        shake = 0;
+        resetSceneObjects();
 
-        targets = [];
-        particles = [];
-        shells = [];
-        floatingTexts = [];
-        bulletHoles = [];
-
-        spawnTimer = .3;
+        spawnTimer = 0.3;
 
         menu.classList.add("sr-hidden");
 
         lastFrame = performance.now();
-
         updateHUD();
-
-        rafId = requestAnimationFrame(loop);
     }
-
-
-    /* ---------- END ---------- */
 
     function endGame() {
 
@@ -895,8 +1552,7 @@ SPACE = NYTT MÅL
 
         menu.classList.remove("sr-hidden");
 
-        const accuracy =
-            shots === 0 ? 100 : Math.round(hits / shots * 100);
+        const accuracy = shots === 0 ? 100 : Math.round(hits / shots * 100);
 
         menuText.innerHTML =
             "Resultat<br><br>" +
@@ -909,177 +1565,18 @@ SPACE = NYTT MÅL
     }
 
 
-    /* ---------- HUD ---------- */
-
-    function updateHUD() {
-
-        scoreElement.textContent = score.toLocaleString("sv-SE");
-        hitsElement.textContent = hits;
-
-        const accuracy =
-            shots === 0 ? 100 : Math.round(hits / shots * 100);
-
-        accuracyElement.textContent = accuracy + "%";
-        comboElement.textContent = "x" + Math.max(1, combo);
-        timeElement.textContent = Math.max(0, timeLeft).toFixed(1);
-    }
-
-
-    /* ---------- TARGET ---------- */
-
-    function spawnTarget() {
-
-        const size = 42 + Math.random() * 35;
-        const x = 190 + Math.random() * 720;
-        const y = 240 + Math.random() * 150;
-
-        targets.push({
-            x: x,
-            y: y,
-            size: size,
-            life: 0,
-            maxLife: 3.5 + Math.random() * 2,
-            speed: .2 + Math.random() * .5,
-            direction: Math.random() < .5 ? -1 : 1,
-            moving: Math.random() < .25
-        });
-    }
-
-
-    /* ---------- SHOOT ---------- */
-
-    function shoot() {
-
-        if (!running) return;
-
-        shots++;
-
-        recoil = 1;
-        muzzleFlash = 1;
-        shake = 2;
-
-        playGunshot();
-
-        ejectShell();
-
-        let hitTarget = null;
-        let closest = Infinity;
-
-        for (const target of targets) {
-
-            const dx = mouseX - target.x;
-            const dy = mouseY - target.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-
-            if (distance < target.size / 2 && distance < closest) {
-                closest = distance;
-                hitTarget = target;
-            }
-        }
-
-        if (hitTarget) {
-            hit(hitTarget);
-        } else {
-            combo = 0;
-            floatingText("MISS", mouseX, mouseY, "#a76c62");
-        }
-
-        updateHUD();
-    }
-
-
-    /* ---------- HIT ---------- */
-
-    function hit(target) {
-
-        hits++;
-        combo++;
-        bestCombo = Math.max(bestCombo, combo);
-
-        const points = 100 + combo * 10;
-        score += points;
-
-        bulletHoles.push({
-            x: target.x + (Math.random() - .5) * target.size * .35,
-            y: target.y + (Math.random() - .5) * target.size * .5,
-            life: 8
-        });
-
-        for (let i = 0; i < 18; i++) {
-
-            const angle = Math.random() * Math.PI * 2;
-            const speed = 40 + Math.random() * 100;
-
-            particles.push({
-                x: target.x,
-                y: target.y,
-                vx: Math.cos(angle) * speed,
-                vy: Math.sin(angle) * speed,
-                life: .3 + Math.random() * .3,
-                size: 1 + Math.random() * 3
-            });
-        }
-
-        floatingText(
-            "+" + points,
-            target.x,
-            target.y,
-            combo >= 5 ? "#e3bd63" : "#d3e3c0"
-        );
-
-        targets.splice(targets.indexOf(target), 1);
-
-        playHit();
-    }
-
-
-    /* ---------- RELOAD ---------- */
-
-    function reload() {
-
-        // Ammo är oändlig — det här är bara en kosmetisk
-        // taktisk omladdning för känslans skull, påverkar
-        // ingen räkning.
-
-        if (reloadCooldown > 0) return;
-
-        reloadCooldown = 1.1;
-
-        setMessage("TAKTISK OMLADDNING", "", "#ccc");
-
-        playMechClick();
-    }
-
-
-    /* ---------- SHELL ---------- */
-
-    function ejectShell() {
-
-        shells.push({
-            x: 705,
-            y: 570,
-            vx: 50 + Math.random() * 70,
-            vy: -130 - Math.random() * 80,
-            rotation: Math.random() * 6,
-            spin: -5 + Math.random() * 10,
-            life: 2
-        });
-    }
-
-
-    /* ---------- MOUSE (scopeat till canvas, inte document) ---------- */
+    /* ---------- MUS / TANGENTBORD ---------- */
 
     function onPointerMove(event) {
 
-        const rect = canvas.getBoundingClientRect();
+        const canvasEl = renderer.domElement;
+        const rect = canvasEl.getBoundingClientRect();
 
-        mouseX = (event.clientX - rect.left) / rect.width * WIDTH;
-        mouseY = (event.clientY - rect.top) / rect.height * HEIGHT;
+        mouseNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        mouseNDC.y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
 
-        const gameRect = game.getBoundingClientRect();
-
-        crosshair.style.left = (event.clientX - gameRect.left) + "px";
-        crosshair.style.top = (event.clientY - gameRect.top) + "px";
+        crosshair.style.left = (event.clientX - rect.left) + "px";
+        crosshair.style.top = (event.clientY - rect.top) + "px";
     }
 
     function onPointerDown(event) {
@@ -1088,18 +1585,6 @@ SPACE = NYTT MÅL
         shoot();
     }
 
-    canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerdown", onPointerDown);
-
-
-    /* ---------- KEYBOARD (scopeat till appen, kräver fokus) ---------- */
-    /*
-        Lyssnar på appens EGET element (app.tabIndex = 0) istället
-        för hela document. Det gör att R/SPACE bara triggar den här
-        rutan när den är fokuserad — viktigt om flera Kanvas-rutor
-        (och deras egna tangentbordsgenvägar) delar samma sida.
-    */
-
     function onKeyDown(event) {
 
         if (event.key.toLowerCase() === "r") {
@@ -1107,9 +1592,7 @@ SPACE = NYTT MÅL
         }
 
         if (event.code === "Space") {
-
             event.preventDefault();
-
             if (!running) {
                 startGame();
             } else {
@@ -1118,752 +1601,138 @@ SPACE = NYTT MÅL
         }
     }
 
-    app.addEventListener("keydown", onKeyDown);
 
-    // Klick i rutan ger den tangentbordsfokus
-    app.addEventListener("pointerdown", function () {
-        app.focus();
-    });
-
-
-    /* ---------- RANGE ---------- */
-
-    function drawRange() {
-
-        const ceiling = ctx.createLinearGradient(0, 65, 0, 220);
-        ceiling.addColorStop(0, "#101315");
-        ceiling.addColorStop(1, "#292720");
-        ctx.fillStyle = ceiling;
-        ctx.fillRect(0, 65, WIDTH, 160);
-
-        const wall = ctx.createLinearGradient(0, 160, 0, 450);
-        wall.addColorStop(0, "#28231d");
-        wall.addColorStop(1, "#100f0d");
-        ctx.fillStyle = wall;
-        ctx.fillRect(120, 160, 860, 300);
-
-        const floor = ctx.createLinearGradient(0, 430, 0, 700);
-        floor.addColorStop(0, "#514a3d");
-        floor.addColorStop(1, "#171715");
-        ctx.fillStyle = floor;
-        ctx.fillRect(0, 430, WIDTH, 270);
-
-        ctx.fillStyle = "#27211b";
-        ctx.fillRect(0, 120, 120, 380);
-        ctx.fillRect(980, 120, 120, 380);
-
-        ctx.strokeStyle = "rgba(190,150,100,.15)";
-        ctx.lineWidth = 3;
-
-        for (let y = 130; y < 500; y += 45) {
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(120, y);
-            ctx.stroke();
-
-            ctx.beginPath();
-            ctx.moveTo(980, y);
-            ctx.lineTo(1100, y);
-            ctx.stroke();
-        }
-
-        ctx.strokeStyle = "rgba(220,200,160,.12)";
-        ctx.lineWidth = 2;
-
-        for (let x = 100; x <= 1000; x += 150) {
-            ctx.beginPath();
-            ctx.moveTo(550, 430);
-            ctx.lineTo(x, 700);
-            ctx.stroke();
-        }
-
-        ctx.fillStyle = "#151616";
-
-        for (let x = 130; x < 1000; x += 175) {
-            ctx.fillRect(x, 110, 25, 85);
-        }
-
-        for (let x = 210; x < 950; x += 180) {
-
-            ctx.fillStyle = "#d7d0b9";
-            ctx.fillRect(x, 135, 65, 7);
-
-            const glow = ctx.createRadialGradient(
-                x + 32, 142, 2,
-                x + 32, 142, 90
-            );
-
-            glow.addColorStop(0, "rgba(255,235,190,.14)");
-            glow.addColorStop(1, "rgba(255,235,190,0)");
-
-            ctx.fillStyle = glow;
-            ctx.fillRect(x - 60, 80, 185, 140);
-        }
-
-        ctx.font = "bold 22px Arial";
-        ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(220,210,190,.35)";
-
-        const distances = [
-            [230, "10"], [410, "15"], [590, "20"], [770, "25"], [930, "30"]
-        ];
-
-        for (const d of distances) {
-            ctx.fillText(d[1], d[0], 105);
-        }
-    }
-
-
-    /* ---------- TARGET ---------- */
-
-    function drawTarget(target) {
-
-        const s = target.size;
-
-        ctx.save();
-
-        ctx.fillStyle = "rgba(0,0,0,.45)";
-        ctx.beginPath();
-        ctx.ellipse(target.x + 5, target.y + 6, s * .52, s * .8, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = "#d5d0c2";
-        ctx.fillRect(target.x - s / 2, target.y - s * .75, s, s * 1.5);
-
-        ctx.fillStyle = "#171819";
-        ctx.beginPath();
-        ctx.arc(target.x, target.y - s * .43, s * .15, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.beginPath();
-        ctx.moveTo(target.x - s * .24, target.y - s * .25);
-        ctx.quadraticCurveTo(target.x - s * .38, target.y + s * .15, target.x - s * .28, target.y + s * .65);
-        ctx.lineTo(target.x + s * .28, target.y + s * .65);
-        ctx.quadraticCurveTo(target.x + s * .38, target.y + s * .15, target.x + s * .24, target.y - s * .25);
-        ctx.closePath();
-        ctx.fill();
-
-        const rings = [
-            [.31, "#d5d0c2"],
-            [.24, "#171819"],
-            [.16, "#c3bcad"],
-            [.09, "#18191a"],
-            [.045, "#9c4d42"]
-        ];
-
-        for (const ring of rings) {
-            ctx.strokeStyle = ring[1];
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.ellipse(target.x, target.y, s * ring[0], s * ring[0] * 1.2, 0, 0, Math.PI * 2);
-            ctx.stroke();
-        }
-
-        for (const hole of bulletHoles) {
-
-            if (Math.abs(hole.x - target.x) < s && Math.abs(hole.y - target.y) < s) {
-
-                ctx.fillStyle = "#111";
-                ctx.beginPath();
-                ctx.arc(hole.x, hole.y, 2.5, 0, Math.PI * 2);
-                ctx.fill();
-            }
-        }
-
-        ctx.restore();
-    }
-
-
-    /* ---------- TARGET UPDATE ---------- */
-
-    function updateTargets(dt) {
-
-        for (let i = targets.length - 1; i >= 0; i--) {
-
-            const target = targets[i];
-            target.life += dt;
-
-            if (target.moving) {
-
-                target.x += target.speed * target.direction * 35 * dt;
-
-                if (target.x < 180 || target.x > 920) {
-                    target.direction *= -1;
-                }
-            }
-
-            if (target.life > target.maxLife) {
-                targets.splice(i, 1);
-                combo = 0;
-                continue;
-            }
-
-            drawTarget(target);
-        }
-    }
-
-
-    /* ---------- PARTICLES ---------- */
-
-    function updateParticles(dt) {
-
-        for (let i = particles.length - 1; i >= 0; i--) {
-
-            const p = particles[i];
-
-            p.life -= dt;
-            p.x += p.vx * dt;
-            p.y += p.vy * dt;
-            p.vx *= .96;
-            p.vy *= .96;
-
-            if (p.life <= 0) {
-                particles.splice(i, 1);
-                continue;
-            }
-
-            ctx.globalAlpha = Math.min(1, p.life * 3);
-            ctx.fillStyle = "#d3c5a5";
-            ctx.fillRect(p.x, p.y, p.size, p.size);
-            ctx.globalAlpha = 1;
-        }
-    }
-
-
-    /* ---------- SHELLS ---------- */
-
-    function updateShells(dt) {
-
-        for (let i = shells.length - 1; i >= 0; i--) {
-
-            const shell = shells[i];
-
-            shell.life -= dt;
-            shell.vy += 250 * dt;
-            shell.x += shell.vx * dt;
-            shell.y += shell.vy * dt;
-            shell.rotation += shell.spin * dt;
-
-            if (shell.life <= 0 || shell.y > 690) {
-                shells.splice(i, 1);
-                continue;
-            }
-
-            ctx.save();
-            ctx.translate(shell.x, shell.y);
-            ctx.rotate(shell.rotation);
-
-            ctx.fillStyle = "#b58c4d";
-            ctx.fillRect(-2, -6, 4, 12);
-
-            ctx.fillStyle = "#e0b86c";
-            ctx.fillRect(-2, -6, 4, 2);
-
-            ctx.restore();
-        }
-    }
-
-
-    /* ---------- FLOATING TEXT ---------- */
-
-    function floatingText(text, x, y, color) {
-
-        floatingTexts.push({
-            text: text,
-            x: x,
-            y: y,
-            color: color,
-            life: 1
-        });
-    }
-
-    function updateFloatingTexts(dt) {
-
-        for (let i = floatingTexts.length - 1; i >= 0; i--) {
-
-            const t = floatingTexts[i];
-
-            t.life -= dt;
-            t.y -= 25 * dt;
-
-            if (t.life <= 0) {
-                floatingTexts.splice(i, 1);
-                continue;
-            }
-
-            ctx.globalAlpha = Math.min(1, t.life * 2);
-            ctx.font = "bold 20px Arial";
-            ctx.textAlign = "center";
-            ctx.fillStyle = t.color;
-            ctx.fillText(t.text, t.x, t.y);
-            ctx.globalAlpha = 1;
-        }
-    }
-
-
-    /* ---------- WEAPON (mer realistisk pistol) ---------- */
-    /*
-        Uppbyggnad, från botten till toppen:
-        - Underarm + hand (oförändrat, bara referens)
-        - Ram/grip med greppstruktur, avtryckarbygel,
-          avtryckare och magasinsbotten (rör sig lite vid rekyl)
-        - Slide (ovandel) som glider bakåt/uppåt separat från
-          ramen vid skott — simulerar blowback — med
-          metallgradient, räfflor i bakkant och ejection port
-        - Främre/bakre sikte
-        - Mynningsflamma vid pipans mynning
-    */
-
-    function drawWeapon() {
-
-        ctx.save();
-
-        // recoil går 1 -> 0 exponentiellt (sätts till 1 vid skott)
-        const frameKick = recoil * 6;   // ramen/handen rör sig lite
-        const slideKick = recoil * 16;  // sliden rör sig mer, och bakåt
-
-        const baseX = 615; // ungefärlig pipa/mynnings-x
-        const baseY = 552; // ungefärlig pipa/mynnings-y
-
-
-        /* --- Underarm --- */
-
-        ctx.fillStyle = "#4b382d";
-        ctx.beginPath();
-        ctx.moveTo(450, 700);
-        ctx.lineTo(520, 700);
-        ctx.lineTo(600, 555 + frameKick);
-        ctx.lineTo(550, 540 + frameKick);
-        ctx.closePath();
-        ctx.fill();
-
-
-        /* --- Hand --- */
-
-        ctx.fillStyle = "#1d2020";
-        ctx.beginPath();
-        ctx.moveTo(510, 700);
-        ctx.lineTo(580, 700);
-        ctx.lineTo(625, 585 + frameKick);
-        ctx.lineTo(580, 555 + frameKick);
-        ctx.closePath();
-        ctx.fill();
-
-
-        /* --- Skugga under vapnet --- */
-
-        ctx.fillStyle = "rgba(0,0,0,.35)";
-        ctx.beginPath();
-        ctx.ellipse(630, 672 + frameKick, 55, 8, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-
-        /* --- Ram/frame (rör sig lite, mindre än sliden) --- */
-
-        ctx.save();
-        ctx.translate(0, frameKick);
-
-        // Avtryckarbygel
-        ctx.strokeStyle = "#0d0e0e";
-        ctx.lineWidth = 6;
-        ctx.beginPath();
-        ctx.ellipse(596, 585, 16, 20, 0, 0.1, Math.PI * 1.5);
-        ctx.stroke();
-
-        // Avtryckare
-        ctx.fillStyle = "#3a3d3e";
-        ctx.fillRect(592, 572, 5, 16);
-
-        // Grip (handtag)
-        const gripGradient = ctx.createLinearGradient(550, 550, 640, 550);
-        gripGradient.addColorStop(0, "#0c0d0d");
-        gripGradient.addColorStop(0.5, "#1c1e1e");
-        gripGradient.addColorStop(1, "#0c0d0d");
-
-        ctx.fillStyle = gripGradient;
-        ctx.beginPath();
-        ctx.moveTo(575, 550);
-        ctx.lineTo(640, 550);
-        ctx.lineTo(628, 668);
-        ctx.lineTo(552, 668);
-        ctx.closePath();
-        ctx.fill();
-
-        // Greppstruktur — diamantmönstrad checkering (som på riktiga
-        // pistolgrepp) istället för enkla horisontella räfflor.
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(575, 552);
-        ctx.lineTo(638, 552);
-        ctx.lineTo(627, 665);
-        ctx.lineTo(554, 665);
-        ctx.closePath();
-        ctx.clip();
-
-        ctx.strokeStyle = "rgba(70,74,74,.9)";
-        ctx.lineWidth = 1;
-
-        for (let d = -40; d < 100; d += 6) {
-            ctx.beginPath();
-            ctx.moveTo(552 + d, 552);
-            ctx.lineTo(552 + d + 90, 665);
-            ctx.stroke();
-
-            ctx.beginPath();
-            ctx.moveTo(640 - d, 552);
-            ctx.lineTo(640 - d - 90, 665);
-            ctx.stroke();
-        }
-
-        ctx.restore();
-
-        // Grip-panelens ram (avgränsning mot slide/ramens metall)
-        ctx.strokeStyle = "#050606";
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(575, 552);
-        ctx.lineTo(638, 552);
-        ctx.lineTo(627, 665);
-        ctx.lineTo(554, 665);
-        ctx.closePath();
-        ctx.stroke();
-
-        // Greppskruv (litet detaljelement)
-        ctx.fillStyle = "#5a5d5d";
-        ctx.beginPath();
-        ctx.arc(566, 600, 2.4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(615, 600, 2.4, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Magasinsbotten
-        ctx.fillStyle = "#0a0b0b";
-        ctx.fillRect(553, 664, 76, 10);
-        ctx.strokeStyle = "#2b2d2d";
-        ctx.strokeRect(553, 664, 76, 10);
-
-        // Nedre delen av ramen (framifrån avtryckarbygel till pipbas)
-        ctx.fillStyle = "#17181a";
-        ctx.beginPath();
-        ctx.moveTo(608, 555);
-        ctx.lineTo(660, 555);
-        ctx.lineTo(660, 578);
-        ctx.lineTo(608, 578);
-        ctx.closePath();
-        ctx.fill();
-
-        // Accessory-rail-skåror under pipan (som på moderna pistoler)
-        ctx.strokeStyle = "#050606";
-        ctx.lineWidth = 1;
-
-        for (let x = 612; x < 656; x += 6) {
-            ctx.beginPath();
-            ctx.moveTo(x, 573);
-            ctx.lineTo(x, 578);
-            ctx.stroke();
-        }
-
-        // Slide stop-spak (liten hävarm på ramens sida)
-        ctx.fillStyle = "#26282a";
-        ctx.beginPath();
-        ctx.moveTo(583, 553);
-        ctx.lineTo(597, 550);
-        ctx.lineTo(598, 556);
-        ctx.lineTo(585, 559);
-        ctx.closePath();
-        ctx.fill();
-        ctx.strokeStyle = "#050606";
-        ctx.lineWidth = .5;
-        ctx.stroke();
-
-        // Takedown-spak (liten cirkel, klassisk detalj på semiauto-pistoler)
-        ctx.fillStyle = "#26282a";
-        ctx.beginPath();
-        ctx.arc(590, 566, 5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = "#050606";
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        ctx.restore(); // slut på frame-translate
-
-
-        /* --- Slide (glider bakåt + lite uppåt vid rekyl) --- */
-
-        ctx.save();
-        ctx.translate(-slideKick * 0.6, frameKick - slideKick);
-
-        // Slide-kropp med metallgradient (ljusare upptill = highlight)
-        const slideGradient = ctx.createLinearGradient(555, 515, 555, 558);
-        slideGradient.addColorStop(0, "#3a3d3f");
-        slideGradient.addColorStop(0.35, "#1c1e1f");
-        slideGradient.addColorStop(1, "#0c0d0e");
-
-        ctx.fillStyle = slideGradient;
-        ctx.beginPath();
-        ctx.moveTo(555, 525);
-        ctx.lineTo(680, 525);
-        ctx.lineTo(692, 555);
-        ctx.lineTo(550, 555);
-        ctx.closePath();
-        ctx.fill();
-
-        // Highlight-linje längs slidens ovankant
-        ctx.strokeStyle = "rgba(180,190,195,.55)";
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(560, 527);
-        ctx.lineTo(675, 527);
-        ctx.stroke();
-
-        // Ejection port (utkastningsöppning) på sidans slide
-        ctx.fillStyle = "#050606";
-        ctx.fillRect(600, 532, 30, 12);
-        ctx.strokeStyle = "#2a2c2d";
-        ctx.strokeRect(600, 532, 30, 12);
-
-        // Räfflor bak på sliden (grepp för att dra tillbaka)
-        ctx.strokeStyle = "#4d5253";
-        ctx.lineWidth = 2;
-
-        for (let x = 645; x < 678; x += 4) {
-            ctx.beginPath();
-            ctx.moveTo(x, 528);
-            ctx.lineTo(x, 553);
-            ctx.stroke();
-        }
-
-        // Pipa (syns i mynningen, mörkare rör)
-        const barrelGradient = ctx.createLinearGradient(610, 546, 610, 560);
-        barrelGradient.addColorStop(0, "#2a2c2d");
-        barrelGradient.addColorStop(1, "#050606");
-
-        ctx.fillStyle = barrelGradient;
-        ctx.fillRect(610, 548, 65, 10);
-
-        // Mynningsöppning (mörk cirkel)
-        ctx.fillStyle = "#020303";
-        ctx.beginPath();
-        ctx.arc(675, 553, 5, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Bakre sikte (notch)
-        ctx.fillStyle = "#050606";
-        ctx.fillRect(560, 517, 11, 10);
-        ctx.fillStyle = "#8f9294";
-        ctx.fillRect(563, 519, 2, 6);
-        ctx.fillRect(567, 519, 2, 6);
-
-        // Främre sikte (post) med liten vit prick, klassisk 3-punkt-sikte
-        ctx.fillStyle = "#050606";
-        ctx.fillRect(667, 516, 4, 13);
-        ctx.fillStyle = "#dcd48a";
-        ctx.beginPath();
-        ctx.arc(669, 519, 1.4, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Hammer/hane bak på sliden
-        ctx.fillStyle = "#242627";
-        ctx.beginPath();
-        ctx.arc(554, 538, 6, Math.PI * 0.3, Math.PI * 1.7);
-        ctx.fill();
-
-        ctx.restore(); // slut på slide-translate
-
-
-        /* --- Mynningsflamma --- */
-
-        if (muzzleFlash > 0) {
-
-            const flashX = baseX + 60 - slideKick * 0.6;
-            const flashY = baseY - slideKick;
-
-            const intensity = Math.min(1, muzzleFlash);
-
-            ctx.save();
-            ctx.translate(flashX, flashY);
-            ctx.globalAlpha = intensity;
-
-            // Bakre, mjuk glöd (ljusspill i rummet)
-            const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, 70);
-            glow.addColorStop(0, "rgba(255,235,190,.55)");
-            glow.addColorStop(1, "rgba(255,150,40,0)");
-            ctx.fillStyle = glow;
-            ctx.beginPath();
-            ctx.arc(0, 0, 70, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Stjärnformad krutflamma — klassisk "muzzle flash"-form
-            // med omväxlande långa/korta spikar, lätt roterad slumpmässigt
-            // varje skott för att inte se stel/repetitiv ut.
-            const spikes = 7;
-            const rotation = Math.random() * Math.PI * 2;
-
-            const flashShape = ctx.createRadialGradient(0, 0, 1, 0, 0, 42);
-            flashShape.addColorStop(0, "rgba(255,255,235,.98)");
-            flashShape.addColorStop(.35, "rgba(255,195,80,.9)");
-            flashShape.addColorStop(1, "rgba(255,90,15,0)");
-
-            ctx.fillStyle = flashShape;
-            ctx.beginPath();
-
-            for (let i = 0; i < spikes * 2; i++) {
-
-                const angle = rotation + (Math.PI / spikes) * i;
-                const radius = (i % 2 === 0) ? (30 + Math.random() * 12) : 10;
-
-                const px = Math.cos(angle) * radius;
-                const py = Math.sin(angle) * radius;
-
-                if (i === 0) {
-                    ctx.moveTo(px, py);
-                } else {
-                    ctx.lineTo(px, py);
-                }
-            }
-
-            ctx.closePath();
-            ctx.fill();
-
-            // Vitglödgad kärna precis vid mynningen
-            ctx.fillStyle = "rgba(255,252,240,.95)";
-            ctx.beginPath();
-            ctx.arc(0, 0, 6, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.restore();
-        }
-
-        ctx.restore();
-    }
-
-
-    /* ---------- MESSAGE ---------- */
-
-    function setMessage(main, sub, color) {
-
-        messageMain.textContent = main;
-        messageSub.textContent = sub;
-        messageMain.style.color = color;
-
-        message.style.opacity = "1";
-
-        clearTimeout(messageTimer);
-
-        messageTimer = setTimeout(function () {
-            message.style.opacity = "0";
-        }, 600);
-    }
-
-
-    /* ---------- GAME LOOP ---------- */
+    /* ---------- HUVUDLOOP ---------- */
 
     function loop(now) {
 
-        if (!running || destroyed) return;
+        if (destroyed) return;
 
-        const dt = Math.min(.033, (now - lastFrame) / 1000);
+        const dt = Math.min(0.033, (now - lastFrame) / 1000);
         lastFrame = now;
 
-        timeLeft -= dt;
+        if (running) {
 
-        recoil *= Math.pow(.02, dt * 6);
-        muzzleFlash -= dt * 8;
-        shake *= Math.pow(.03, dt);
-        reloadCooldown = Math.max(0, reloadCooldown - dt);
+            timeLeft -= dt;
 
-        ctx.clearRect(0, 0, WIDTH, HEIGHT);
+            spawnTimer -= dt;
 
-        ctx.save();
+            if (spawnTimer <= 0) {
+                spawnTarget();
+                spawnTimer = 0.5 + Math.random() * 0.8;
+            }
 
-        if (shake > .05) {
-            ctx.translate(
-                (Math.random() - .5) * shake * 3,
-                (Math.random() - .5) * shake * 3
-            );
+            updateTargets(dt);
         }
 
-        drawRange();
-
-        spawnTimer -= dt;
-
-        if (spawnTimer <= 0) {
-            spawnTarget();
-            spawnTimer = .5 + Math.random() * .8;
-        }
-
-        updateTargets(dt);
-        updateParticles(dt);
         updateShells(dt);
+        updateWeapon(dt);
         updateFloatingTexts(dt);
-        drawWeapon();
 
-        ctx.restore();
+        shakeAmount *= Math.pow(0.03, dt);
 
+        if (shakeAmount > 0.01) {
+            camera.rotation.set(
+                cameraBaseEuler.x + (Math.random() - 0.5) * shakeAmount * 0.015,
+                cameraBaseEuler.y + (Math.random() - 0.5) * shakeAmount * 0.015,
+                cameraBaseEuler.z
+            );
+        } else {
+            camera.rotation.copy(cameraBaseEuler);
+        }
+
+        renderer.render(scene, camera);
         updateHUD();
 
-        if (timeLeft <= 0) {
+        if (running && timeLeft <= 0) {
             timeLeft = 0;
             endGame();
-            return;
         }
 
         rafId = requestAnimationFrame(loop);
     }
 
 
-    /* ---------- START BUTTON ---------- */
+    /* ---------- STORLEK ---------- */
 
-    startButton.addEventListener("click", startGame);
+    function resizeRenderer() {
 
+        if (!renderer || !camera) return;
 
-    /* ---------- CANVAS SCALE ---------- */
-
-    function resizeCanvas() {
-
-        const rect = canvas.getBoundingClientRect();
-        const ratio = window.devicePixelRatio || 1;
-
-        // Skydda mot 0x0 om rutan inte är synlig/mätbar ännu
+        const rect = game.getBoundingClientRect();
         const w = Math.max(1, rect.width);
         const h = Math.max(1, rect.height);
 
-        canvas.width = w * ratio;
-        canvas.height = h * ratio;
-
-        ctx.setTransform(
-            (w * ratio) / WIDTH,
-            0,
-            0,
-            (h * ratio) / HEIGHT,
-            0,
-            0
-        );
+        renderer.setSize(w, h, false);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
     }
 
-    // ResizeObserver istället för window "resize": fångar även
-    // storleksändringar när Kanvas-rutan dras/ändras i storlek,
-    // inte bara när hela webbläsarfönstret ändras.
-    let resizeObserver = null;
+
+    /* ---------- INITIERING AV 3D-SCEN ---------- */
+
+    function initScene(threeLib) {
+
+        if (destroyed) return;
+
+        THREE = threeLib;
+        raycaster = new THREE.Raycaster();
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.domElement.className = "sr-canvas";
+        renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+
+        game.insertBefore(renderer.domElement, hud);
+
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x05070a);
+        scene.fog = new THREE.Fog(0x05070a, 12, 30);
+
+        camera = new THREE.PerspectiveCamera(55, 1100 / 700, 0.1, 100);
+        camera.position.set(0, 1.55, 2);
+        camera.lookAt(0, 1.4, -10);
+        cameraBaseEuler = camera.rotation.clone();
+
+        buildRoom();
+        buildWeapon();
+
+        resizeRenderer();
+
+        threeReady = true;
+        startButton.disabled = false;
+        menuText.textContent =
+            "Testa din precision på en realistisk 3D-inomhusbana. " +
+            "Träffa målen snabbt, bygg combos och få högsta möjliga poäng.";
+
+        rafId = requestAnimationFrame(loop);
+    }
+
+
+    /* ---------- EVENT-LYSSNARE ---------- */
+
+    app.addEventListener("pointermove", onPointerMove);
+    app.addEventListener("pointerdown", onPointerDown);
+    app.addEventListener("keydown", onKeyDown);
+
+    app.addEventListener("pointerdown", function () {
+        app.focus();
+    });
+
+    startButton.addEventListener("click", startGame);
 
     if (typeof ResizeObserver !== "undefined") {
-        resizeObserver = new ResizeObserver(resizeCanvas);
+        resizeObserver = new ResizeObserver(resizeRenderer);
         resizeObserver.observe(game);
     } else {
-        window.addEventListener("resize", resizeCanvas);
+        window.addEventListener("resize", resizeRenderer);
     }
 
-    resizeCanvas();
-    updateHUD();
 
-
-    /* ---------- CLEANUP ---------- */
+    /* ---------- STÄDNING ---------- */
 
     function cleanup() {
 
         if (destroyed) return;
-
         destroyed = true;
         running = false;
 
@@ -1874,48 +1743,71 @@ SPACE = NYTT MÅL
 
         clearTimeout(messageTimer);
 
-        canvas.removeEventListener("pointermove", onPointerMove);
-        canvas.removeEventListener("pointerdown", onPointerDown);
+        app.removeEventListener("pointermove", onPointerMove);
+        app.removeEventListener("pointerdown", onPointerDown);
         app.removeEventListener("keydown", onKeyDown);
 
-        if (resizeObserver) {
-            resizeObserver.disconnect();
+        if (resizeObserver) resizeObserver.disconnect();
+        if (mutationObserver) mutationObserver.disconnect();
+
+        if (threeReady) {
+
+            resetSceneObjects();
+
+            if (scene) {
+                disposeObject3D(scene);
+            }
+
+            if (renderer) {
+
+                renderer.dispose();
+
+                // Frigör WebGL-kontexten direkt istället för att förlita
+                // sig på att GC städar upp den vid ett senare tillfälle
+                // — viktigt om rutan startas/stoppas många gånger, annars
+                // kan webbläsaren hinna skapa fler WebGL-kontexter än den
+                // tillåter innan de gamla hinner städas bort.
+                const loseContextExt =
+                    renderer.getContext &&
+                    renderer.getContext().getExtension("WEBGL_lose_context");
+
+                if (loseContextExt) {
+                    loseContextExt.loseContext();
+                }
+
+                if (renderer.domElement.parentElement) {
+                    renderer.domElement.parentElement.removeChild(renderer.domElement);
+                }
+            }
         }
 
-        if (mutationObserver) {
-            mutationObserver.disconnect();
-        }
-
-        if (app.parentElement) {
-            app.parentElement.removeChild(app);
-        }
-
-        if (style.parentElement) {
-            style.parentElement.removeChild(style);
-        }
+        if (app.parentElement) app.parentElement.removeChild(app);
+        if (style.parentElement) style.parentElement.removeChild(style);
 
         delete mount.__shootingRangeCleanup;
     }
 
-    // Om Kanvas rutans "■ Stoppa"-knapp finns i samma DOM och tar
-    // bort rutans element ur trädet, städar vi automatiskt upp.
-    let mutationObserver = null;
-
     if (typeof MutationObserver !== "undefined" && app.parentElement) {
-
         mutationObserver = new MutationObserver(function () {
-
             if (!document.body.contains(app)) {
                 cleanup();
             }
         });
-
         mutationObserver.observe(mount, { childList: true });
     }
 
-    // Publikt kopplingsställe ifall Kanvas vill anropa städningen
-    // manuellt (t.ex. från en egen "Stoppa"-knapp i sitt UI):
     mount.__shootingRangeCleanup = cleanup;
     app.kanvasStop = cleanup;
+
+
+    /* ---------- STARTA LADDNING AV THREE.JS ---------- */
+
+    loadThree()
+        .then(initScene)
+        .catch(function (error) {
+            menuText.textContent =
+                "Kunde inte ladda 3D-motorn (Three.js). " +
+                "Kontrollera internetanslutningen och försök igen.";
+        });
 
 })();
