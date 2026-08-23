@@ -1,18 +1,181 @@
-// 3D-äventyr med tredjepersonskamera, Fortnite-stil musstyrning: klicka i
-// rutan för att låsa muspekaren, rör sedan musen fritt för att vrida
-// kameran. Gubbens kropp vrider sig alltid mjukt mot musens/kamerans
-// riktning, oavsett om du rör dig eller inte. En knapp låter dig invertera
-// den vertikala muskänslan live.
-//
-// FIX: Hela scriptet är nu inslaget i en async IIFE, se botten av filen.
-// Anledningen till felet "Unexpected identifier" var att raden
-// `await import('three')` stod direkt på toppnivå. `await` är bara
-// tillåtet i en `async`-funktion (eller i en riktig ES-modul), så när
-// filen kördes som ett vanligt script kraschade parsern direkt på den
-// raden — och det gav i sin tur förvirrande följdfel längre ner.
-(async function () {
+"use strict";
 
-const THREE = await import('three');
+/*
+    HINDERBANA — Kanvas-anpassad version
+    ======================================
+
+    Originalfilen var byggd för ett annat verktyg som automatiskt gav
+    scriptet en färdig `el` (rutans DOM-element) och en `el._disposers`
+    (array för städfunktioner). Kanvas ger inte det åt ett vanligt
+    script, vilket är varför "ingenting hände" — `el` var odefinierad
+    och `import('three')` kunde inte matchas mot något paket, så hela
+    scriptet kraschade tyst (ett ohanterat promise-fel som bara syns i
+    webbläsarens konsol, inte i själva rutan).
+
+    Den här versionen:
+      - Skapar sitt eget `el` (en container-div) och monterar det i
+        rutan, på samma sätt som Shooting Range.
+      - Laddar Three.js från cdnjs som en vanlig <script>-tagg istället
+        för `import('three')`, eftersom det inte kräver en import-map.
+      - Definierar `el._disposers` själv och kör igenom dem via en egen
+        städfunktion, kopplad till en stäng-knapp och en
+        MutationObserver (samma mönster som i Shooting Range) så att
+        rutan städar upp sig själv oavsett hur Kanvas kör den.
+
+    Spellogiken i sig (gubbe, hinder, mynt, kamera, musstyrning) är
+    orörd — det är bara inpackningen runt den som är ny.
+*/
+
+(function () {
+
+    const scriptEl = document.currentScript;
+
+    const mount =
+        (scriptEl && scriptEl.parentElement) ||
+        document.body;
+
+    if (mount.__obstacleCourseCleanup) {
+        try {
+            mount.__obstacleCourseCleanup();
+        } catch (error) {
+        }
+    }
+
+    const el = document.createElement("div");
+    el.style.width = "100%";
+    el.style.height = "100%";
+    el.style.minHeight = "320px";
+    el.style.position = "relative";
+    el.style.overflow = "hidden";
+    el.style.borderRadius = "8px";
+    el.tabIndex = 0;
+
+    mount.appendChild(el);
+
+    el._disposers = [];
+    el._rafId = null;
+    el._destroyed = false;
+
+
+    /* ---------- STÄNG-KNAPP ---------- */
+
+    const closeButton = document.createElement("button");
+    closeButton.textContent = "×";
+    closeButton.style.cssText =
+        "position:absolute; top:10px; right:12px; z-index:50; " +
+        "width:34px; height:34px; padding:0; " +
+        "border:1px solid rgba(255,255,255,.25); border-radius:5px; " +
+        "background:rgba(0,0,0,.35); color:#eee; font-size:22px; " +
+        "line-height:30px; font-weight:normal; cursor:pointer;";
+
+    closeButton.addEventListener("mouseenter", function () {
+        closeButton.style.background = "#7b302b";
+    });
+
+    closeButton.addEventListener("mouseleave", function () {
+        closeButton.style.background = "rgba(0,0,0,.35)";
+    });
+
+    closeButton.addEventListener("click", function () {
+        cleanup();
+    });
+
+    el.appendChild(closeButton);
+
+
+    /* ---------- LADDNINGSMEDDELANDE ---------- */
+
+    const loadingMsg = document.createElement("div");
+    loadingMsg.textContent = "Laddar 3D-motor …";
+    loadingMsg.style.cssText =
+        "position:absolute; inset:0; z-index:1; " +
+        "display:flex; align-items:center; justify-content:center; " +
+        "background:#8ec6e6; color:#173347; " +
+        "font:600 14px Arial, sans-serif;";
+
+    el.appendChild(loadingMsg);
+
+
+    /* ---------- STÄDNING ---------- */
+
+    let mutationObserver = null;
+
+    function cleanup() {
+
+        if (el._destroyed) return;
+        el._destroyed = true;
+
+        if (el._rafId !== null) {
+            cancelAnimationFrame(el._rafId);
+            el._rafId = null;
+        }
+
+        for (const dispose of el._disposers) {
+            try {
+                dispose();
+            } catch (error) {
+            }
+        }
+
+        if (mutationObserver) {
+            mutationObserver.disconnect();
+        }
+
+        if (el.parentElement) {
+            el.parentElement.removeChild(el);
+        }
+
+        delete mount.__obstacleCourseCleanup;
+    }
+
+    if (typeof MutationObserver !== "undefined") {
+
+        mutationObserver = new MutationObserver(function () {
+            if (!document.body.contains(el)) {
+                cleanup();
+            }
+        });
+
+        mutationObserver.observe(mount, { childList: true });
+    }
+
+    mount.__obstacleCourseCleanup = cleanup;
+    el.kanvasStop = cleanup;
+
+
+    /* ---------- LADDA THREE.JS FRÅN CDN (istället för import('three')) ---------- */
+
+    function loadThree() {
+        return new Promise(function (resolve, reject) {
+
+            if (window.THREE) {
+                resolve(window.THREE);
+                return;
+            }
+
+            const script = document.createElement("script");
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
+
+            script.onload = function () {
+                resolve(window.THREE);
+            };
+
+            script.onerror = function () {
+                reject(new Error("Three.js kunde inte laddas (ingen internetanslutning?)"));
+            };
+
+            document.head.appendChild(script);
+        });
+    }
+
+
+    /* ---------- SPELET (startar när Three.js är laddat) ---------- */
+
+    loadThree().then(function (THREE) {
+
+        if (el._destroyed) return;
+
+        loadingMsg.remove();
 
 el.style.position = 'relative';
 el.style.background = '#8ec6e6';
@@ -823,5 +986,12 @@ el._disposers.push(() => {
   if (messageBox.parentNode) messageBox.remove();
   if (lockHint.parentNode) lockHint.remove();
 });
+
+    }).catch(function (error) {
+
+        loadingMsg.textContent =
+            "Kunde inte ladda 3D-motorn (Three.js). " +
+            "Kontrollera internetanslutningen och försök igen.";
+    });
 
 })();
