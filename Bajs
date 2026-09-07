@@ -1,0 +1,1434 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0F1720">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Kanvas</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0; padding: 0; height: 100%; overflow: hidden;
+  background: #0F1720; font-family: 'IBM Plex Mono', monospace;
+}
+
+button { font: inherit; }
+
+#toolbar {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: calc(56px + env(safe-area-inset-top));
+  display: flex; align-items: center; justify-content: space-between;
+  padding: env(safe-area-inset-top) 14px 0 14px;
+  background: rgba(15,23,32,0.9);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border-bottom: 1px solid #24333E; z-index: 1000;
+}
+
+.brand { display: flex; align-items: baseline; gap: 8px; }
+.brand-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 19px; letter-spacing: 0.5px; color: #DCE6EC; }
+.toolbar-right { display: flex; align-items: center; gap: 10px; }
+.status { font-size: 11px; color: #5D7484; min-width: 56px; text-align: right; }
+
+.add-btn {
+  font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 14px;
+  background: #E8A33D; color: #0F1720; border: none;
+  padding: 10px 16px; border-radius: 9px; cursor: pointer;
+}
+.add-btn:active { background: #C6842A; }
+
+#canvas-scroll {
+  position: absolute; top: calc(56px + env(safe-area-inset-top)); left: 0; right: 0; bottom: 0;
+  overflow: auto; -webkit-overflow-scrolling: touch;
+}
+#canvas-sizer { position: relative; width: 4000px; height: 4000px; }
+#canvas {
+  position: absolute; top: 0; left: 0; width: 4000px; height: 4000px;
+  transform-origin: 0 0;
+  background-color: #0F1720;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.07) 1px, transparent 1px),
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: 200px 200px, 200px 200px, 40px 40px, 40px 40px;
+}
+
+#zoom-controls {
+  position: fixed; right: 16px; top: calc(66px + env(safe-area-inset-top)); z-index: 900;
+  display: flex; flex-direction: column; align-items: stretch;
+  background: rgba(28,43,54,0.92); border: 1px solid #2A3B47; border-radius: 12px;
+  overflow: hidden; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+}
+#zoom-controls button {
+  width: 44px; height: 44px; background: none; border: none; color: #DCE6EC;
+  font-size: 20px; font-family: 'Space Grotesk', sans-serif; cursor: pointer;
+}
+#zoom-controls button:active { background: rgba(232,163,61,0.15); color: #E8A33D; }
+#zoomLabel {
+  font-size: 10px; color: #7C93A3; padding: 4px 0; text-align: center;
+  border-top: 1px solid #2A3B47; border-bottom: 1px solid #2A3B47; cursor: pointer;
+}
+
+.box {
+  position: absolute; width: min(300px, 86vw);
+  background: #16212B; border: 1px solid #2A3B47; border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.box.dragging { border-color: #E8A33D; box-shadow: 0 8px 28px rgba(0,0,0,0.5); }
+.box.pulse { animation: pulseGlow 0.5s ease-out; }
+.box.fullscreen {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  width: auto; height: 100dvh; z-index: 1500; border-radius: 0;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.box.fullscreen .box-code { flex: 2 1 0; min-height: 100px; }
+.box.fullscreen .box-canvas.has-content { flex: 3 1 0; height: auto; min-height: 200px; }
+.box.fullscreen .box-output { flex: 0 0 auto; max-height: 22vh; }
+
+.box-icon-btn {
+  background: none; border: none; color: #7C93A3; width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center; border-radius: 6px;
+  cursor: pointer; touch-action: manipulation; flex-shrink: 0;
+}
+.box-icon-btn:active { color: #E8A33D; background: rgba(232,163,61,0.12); }
+.box-icon-btn.active { color: #E8A33D; }
+
+.box.code-collapsed .box-code { display: none; }
+
+.run-btn.running { color: #D96C6C; }
+
+@keyframes pulseGlow {
+  0% { box-shadow: 0 0 0 0 rgba(232,163,61,0.55), 0 4px 16px rgba(0,0,0,0.35); }
+  100% { box-shadow: 0 0 0 14px rgba(232,163,61,0), 0 4px 16px rgba(0,0,0,0.35); }
+}
+@media (prefers-reduced-motion: reduce) { .box.pulse { animation: none; } }
+
+.box-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 10px; background: #1C2B36; border-bottom: 1px solid #2A3B47;
+  cursor: grab; touch-action: none; user-select: none;
+}
+.box-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.box-name {
+  font-size: 12px; color: #DCE6EC; letter-spacing: 0.3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;
+  border-bottom: 1px dotted #45596A; padding-bottom: 1px; touch-action: manipulation;
+}
+.box-saved { font-size: 11px; color: #8FBC94; opacity: 0; transition: opacity 0.25s ease; flex-shrink: 0; }
+.box-saved.show { opacity: 1; }
+.delete-btn {
+  background: none; border: none; color: #7C93A3; font-size: 19px; line-height: 1;
+  cursor: pointer; padding: 2px 6px; touch-action: manipulation;
+}
+.delete-btn:active { color: #D96C6C; }
+
+.box-code {
+  font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #DCE6EC;
+  background: #0F1720; border: none; padding: 10px; min-height: 90px;
+  resize: vertical; outline: none; line-height: 1.5; width: 100%; display: block;
+}
+.run-btn {
+  background: transparent; color: #E8A33D; border: none;
+  border-top: 1px solid #2A3B47; padding: 10px; cursor: pointer;
+  text-align: left; font-weight: 600; font-size: 13px;
+}
+.run-btn:active { background: rgba(232,163,61,0.12); }
+
+.box-canvas { display: none; background: #000; position: relative; }
+.box-canvas.has-content { display: block; height: 220px; overflow: hidden; border-top: 1px solid #2A3B47; }
+.box-canvas canvas { display: block; width: 100% !important; height: 100% !important; touch-action: none; }
+
+.box-output {
+  font-size: 12px; padding: 9px 10px; border-top: 1px solid #2A3B47;
+  max-height: 140px; overflow-y: auto; min-height: 18px;
+}
+.out-log { color: #DCE6EC; white-space: pre-wrap; word-break: break-word; margin-bottom: 3px; }
+.out-result { color: #8FBC94; white-space: pre-wrap; word-break: break-word; }
+.out-error { color: #D96C6C; white-space: pre-wrap; word-break: break-word; }
+.out-empty { color: #45596A; font-style: italic; }
+
+.icon-btn {
+  background: none; border: none; color: #7C93A3; width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center; border-radius: 8px; cursor: pointer;
+}
+.icon-btn:active { color: #E8A33D; background: rgba(232,163,61,0.12); }
+
+#settings-menu {
+  display: none; position: fixed; z-index: 1100; min-width: 190px;
+  background: #16212B; border: 1px solid #2A3B47; border-radius: 10px;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.4); overflow: hidden;
+}
+#settings-menu button {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  color: #DCE6EC; padding: 12px 14px; font-size: 13px; font-family: 'IBM Plex Mono', monospace; cursor: pointer;
+}
+#settings-menu button:active { background: rgba(232,163,61,0.1); }
+#settings-menu button + button { border-top: 1px solid #2A3B47; }
+
+#transfer-overlay {
+  display: none; position: fixed; inset: 0; z-index: 1150;
+  background: rgba(15,23,32,0.94); align-items: center; justify-content: center; padding: 20px;
+}
+#transfer-panel {
+  background: #16212B; border: 1px solid #2A3B47; border-radius: 14px; padding: 18px;
+  max-width: 420px; width: 100%; max-height: 82vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px; font-family: 'IBM Plex Mono', monospace;
+}
+#transfer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+#transfer-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; color: #DCE6EC; font-size: 15px; }
+#transfer-close { background: none; border: none; color: #7C93A3; font-size: 20px; cursor: pointer; line-height: 1; }
+.transfer-label { color: #7C93A3; font-size: 12px; }
+.transfer-row { display: flex; gap: 8px; }
+.transfer-divider { border-top: 1px solid #2A3B47; margin: 6px 0; }
+#transfer-export-area, #transfer-import-area {
+  width: 100%; height: 84px; background: #0F1720; color: #DCE6EC; border: 1px solid #2A3B47;
+  border-radius: 8px; padding: 8px; font-size: 11px; font-family: 'IBM Plex Mono', monospace; resize: none;
+}
+#transfer-export-btn, #transfer-import-btn {
+  background: #E8A33D; color: #0F1720; border: none; border-radius: 8px; padding: 9px 14px;
+  font-weight: 600; cursor: pointer; font-family: 'Space Grotesk', sans-serif; font-size: 13px;
+}
+#transfer-copy-btn {
+  background: #1C2B36; color: #DCE6EC; border: 1px solid #2A3B47; border-radius: 8px; padding: 9px 14px;
+  cursor: pointer; font-family: 'Space Grotesk', sans-serif; font-size: 13px;
+}
+#transfer-import-btn { width: 100%; }
+#transfer-status { font-size: 12px; min-height: 16px; }
+
+#undo-toast {
+  display: none; position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%);
+  background: #1C2B36; border: 1px solid #2A3B47; border-radius: 10px;
+  padding: 10px 8px 10px 14px; align-items: center; gap: 14px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4); z-index: 1300; font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px; color: #DCE6EC; max-width: min(320px, 84vw);
+}
+#undo-toast-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#undo-toast-btn {
+  background: none; border: none; color: #E8A33D; font-weight: 600; cursor: pointer;
+  font-family: 'Space Grotesk', sans-serif; font-size: 12px; white-space: nowrap; padding: 6px 8px;
+}
+textarea:focus, button:focus-visible { outline: 2px solid #E8A33D; outline-offset: 1px; }
+
+/* iPad/surfplatta (>=768px bred viewport): bredare rutor och mer luft.
+   Telefon (under 768px) är helt opåverkad av detta block. */
+@media (min-width: 768px) {
+  .box { width: min(440px, 45vw); }
+  .box-name { max-width: 220px; }
+  .box-canvas.has-content { height: 300px; }
+  .box-code { min-height: 110px; }
+}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div class="brand">
+    <span class="brand-title">KANVAS</span>
+    <button class="icon-btn" id="settingsBtn" aria-label="Inställningar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+  </div>
+  <div class="toolbar-right">
+    <span class="status" id="status"></span>
+    <button class="add-btn" id="addBtn">+ Ny ruta</button>
+  </div>
+</div>
+
+<div id="settings-menu">
+  <button id="menuFind">Hitta ruta</button>
+  <button id="menuTransfer">Flytta till annan enhet</button>
+  <button id="menuDebug">Felsökningskonsol: Av</button>
+</div>
+
+<div id="canvas-scroll">
+  <div id="canvas-sizer">
+    <div id="canvas"></div>
+  </div>
+</div>
+
+<div id="zoom-controls">
+  <button id="zoomInBtn" aria-label="Zooma in">+</button>
+  <span id="zoomLabel" title="Tryck för 100%">100%</span>
+  <button id="zoomOutBtn" aria-label="Zooma ut">−</button>
+</div>
+
+<div id="undo-toast">
+  <span id="undo-toast-msg"></span>
+  <button id="undo-toast-btn">Ångra</button>
+</div>
+
+<div id="transfer-overlay">
+  <div id="transfer-panel">
+    <div id="transfer-header">
+      <span id="transfer-title">Flytta till annan enhet</span>
+      <button id="transfer-close" aria-label="Stäng">&times;</button>
+    </div>
+    <div class="transfer-label">Exportera (från den här enheten)</div>
+    <div class="transfer-row">
+      <button id="transfer-export-btn">Skapa kod</button>
+      <button id="transfer-copy-btn">Kopiera</button>
+    </div>
+    <textarea id="transfer-export-area" readonly placeholder='Tryck "Skapa kod" ovan...'></textarea>
+    <div class="transfer-divider"></div>
+    <div class="transfer-label">Importera (på den nya enheten)</div>
+    <textarea id="transfer-import-area" placeholder="Klistra in koden här..."></textarea>
+    <button id="transfer-import-btn">Importera och ladda om</button>
+    <div id="transfer-status"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var CANVAS_SIZE = 4000;
+  var BOX_HALF_WIDTH = 150;
+  var fullscreenBoxId = null;
+  var boxes = [];
+  var nextNum = 1;
+  var topZ = 10;
+  var persistTimer = null;
+  var statusTimer = null;
+  var zoom = 1;
+  var MIN_ZOOM = 0.15;
+  var MAX_ZOOM = 2;
+
+  var canvasEl = document.getElementById('canvas');
+  var sizerEl = document.getElementById('canvas-sizer');
+  var scrollEl = document.getElementById('canvas-scroll');
+
+  // Works inside a Claude artifact (window.storage) and falls back to
+  // localStorage automatically when this file is hosted standalone.
+  var storageAdapter = {
+    hasNative: function () {
+      return typeof window.storage === 'object' && window.storage !== null
+        && typeof window.storage.get === 'function';
+    },
+    get: function (key) {
+      if (this.hasNative()) {
+        return window.storage.get(key).catch(function () { return null; });
+      }
+      try {
+        var raw = localStorage.getItem(key);
+        return Promise.resolve(raw ? { key: key, value: raw } : null);
+      } catch (e) {
+        return Promise.resolve(null);
+      }
+    },
+    set: function (key, value) {
+      if (this.hasNative()) {
+        return window.storage.set(key, value);
+      }
+      try {
+        localStorage.setItem(key, value);
+        return Promise.resolve({ key: key, value: value });
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    },
+    list: function (prefix) {
+      if (this.hasNative() && typeof window.storage.list === 'function') {
+        return window.storage.list(prefix).catch(function () { return { keys: [] }; });
+      }
+      try {
+        var keys = [];
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          if (k && k.indexOf(prefix) === 0) keys.push(k);
+        }
+        return Promise.resolve({ keys: keys });
+      } catch (e) {
+        return Promise.resolve({ keys: [] });
+      }
+    },
+    delete: function (key) {
+      if (this.hasNative() && typeof window.storage.delete === 'function') {
+        return window.storage.delete(key).catch(function () { return null; });
+      }
+      try {
+        localStorage.removeItem(key);
+        return Promise.resolve({ key: key, deleted: true });
+      } catch (e) {
+        return Promise.resolve(null);
+      }
+    }
+  };
+
+  function makeId() {
+    return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  }
+
+  // Zooms toward a specific point on screen (defaults to viewport center),
+  // keeping the logical canvas point under that screen point fixed in place.
+  function applyZoom(newZoom, centerX, centerY) {
+    newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
+    if (centerX === undefined || centerY === undefined) {
+      centerX = scrollEl.clientWidth / 2;
+      centerY = scrollEl.clientHeight / 2;
+    }
+    var canvasX = (scrollEl.scrollLeft + centerX) / zoom;
+    var canvasY = (scrollEl.scrollTop + centerY) / zoom;
+    zoom = newZoom;
+    canvasEl.style.transform = 'scale(' + zoom + ')';
+    sizerEl.style.width = (CANVAS_SIZE * zoom) + 'px';
+    sizerEl.style.height = (CANVAS_SIZE * zoom) + 'px';
+    scrollEl.scrollLeft = canvasX * zoom - centerX;
+    scrollEl.scrollTop = canvasY * zoom - centerY;
+    var label = document.getElementById('zoomLabel');
+    if (label) label.textContent = Math.round(zoom * 100) + '%';
+  }
+
+  // Two-finger pinch to zoom, tracked on the scrollable canvas viewport so it
+  // works no matter where on the (possibly very large) canvas it starts.
+  var activePointers = {};
+  var pinchStartDist = null;
+  var pinchStartZoom = null;
+  var pinchStartMid = null;
+
+  function pointDist(a, b) {
+    return Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+  }
+  function pointMid(a, b) {
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
+
+  scrollEl.addEventListener('pointerdown', function (e) {
+    if (e.target.closest('.box')) return; // let the box (textarea, 3D view, ...) own its own gestures
+    activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var keys = Object.keys(activePointers);
+    if (keys.length === 2) {
+      var a = activePointers[keys[0]], b = activePointers[keys[1]];
+      pinchStartDist = pointDist(a, b);
+      pinchStartZoom = zoom;
+      pinchStartMid = pointMid(a, b);
+    }
+  });
+
+  scrollEl.addEventListener('pointermove', function (e) {
+    if (!(e.pointerId in activePointers)) return;
+    activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var keys = Object.keys(activePointers);
+    if (keys.length === 2 && pinchStartDist) {
+      e.preventDefault();
+      var a = activePointers[keys[0]], b = activePointers[keys[1]];
+      var ratio = pointDist(a, b) / pinchStartDist;
+      var rect = scrollEl.getBoundingClientRect();
+      applyZoom(pinchStartZoom * ratio, pinchStartMid.x - rect.left, pinchStartMid.y - rect.top);
+    }
+  }, { passive: false });
+
+  function endPointerTrack(e) {
+    delete activePointers[e.pointerId];
+    if (Object.keys(activePointers).length < 2) pinchStartDist = null;
+  }
+  scrollEl.addEventListener('pointerup', endPointerTrack);
+  scrollEl.addEventListener('pointercancel', endPointerTrack);
+  scrollEl.addEventListener('pointerleave', endPointerTrack);
+
+  function boxDisplayName(box) {
+    return (box.name && box.name.trim()) ? box.name.trim() : ('Ruta ' + ('0' + box.num).slice(-2));
+  }
+
+  function setStatus(text) {
+    var el = document.getElementById('status');
+    if (el) el.textContent = text;
+  }
+
+  function stringifyArg(a) {
+    if (a === undefined) return 'undefined';
+    if (a === null) return 'null';
+    if (typeof a === 'object') {
+      try { return JSON.stringify(a); } catch (e) { return String(a); }
+    }
+    return String(a);
+  }
+
+  function serializeBox(b) {
+    return { id: b.id, num: b.num, name: b.name || '', x: b.x, y: b.y, code: b.code, output: b.output || null };
+  }
+
+  var lastTouchedBoxId = null;
+  function schedulePersist(boxId) {
+    if (boxId) lastTouchedBoxId = boxId;
+    clearTimeout(persistTimer);
+    persistTimer = setTimeout(persist, 400);
+  }
+
+  function flashSaved(boxId) {
+    if (!boxId) return;
+    var el = document.getElementById('saved-' + boxId);
+    if (!el) return;
+    el.classList.add('show');
+    clearTimeout(el._hideTimer);
+    el._hideTimer = setTimeout(function () { el.classList.remove('show'); }, 1300);
+  }
+
+  function persist() {
+    setStatus('Sparar…');
+    var touched = lastTouchedBoxId;
+    var payload = JSON.stringify({ boxes: boxes.map(serializeBox), nextNum: nextNum });
+    storageAdapter.set('kanvas-boxes', payload).then(function () {
+      setStatus('Sparat');
+      clearTimeout(statusTimer);
+      statusTimer = setTimeout(function () { setStatus(''); }, 1400);
+      flashSaved(touched);
+    }).catch(function () {
+      setStatus('Kunde inte spara');
+    });
+  }
+
+  function loadState() {
+    return storageAdapter.get('kanvas-boxes').then(function (result) {
+      if (result && result.value) {
+        var parsed = JSON.parse(result.value);
+        boxes = parsed.boxes || [];
+        nextNum = parsed.nextNum || (boxes.length + 1);
+      }
+    }).catch(function () {
+      boxes = [];
+      nextNum = 1;
+    });
+  }
+
+  function renderOutput(outputEl, output) {
+    outputEl.innerHTML = '';
+    if (output.error) {
+      var e = document.createElement('div');
+      e.className = 'out-error';
+      e.textContent = '✕ ' + output.error;
+      outputEl.appendChild(e);
+      return;
+    }
+    (output.logs || []).forEach(function (line) {
+      var l = document.createElement('div');
+      l.className = 'out-log';
+      l.textContent = line;
+      outputEl.appendChild(l);
+    });
+    if (output.hasResult) {
+      var r = document.createElement('div');
+      r.className = 'out-result';
+      r.textContent = '→ ' + stringifyArg(output.result);
+      outputEl.appendChild(r);
+    }
+    if (!(output.logs && output.logs.length) && !output.hasResult) {
+      var n = document.createElement('div');
+      n.className = 'out-empty';
+      n.textContent = '(ingen utskrift ännu — tryck Kör)';
+      outputEl.appendChild(n);
+    }
+  }
+
+  // Loads a classic (non-module) script once, for boxes that want a UMD-style
+  // CDN library instead of an ES module. Available to box code as loadScript(url).
+  window.loadScript = function (src) {
+    if (document.querySelector('script[data-kanvas-src="' + src + '"]')) {
+      return Promise.resolve();
+    }
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src;
+      s.setAttribute('data-kanvas-src', src);
+      s.onload = function () { resolve(); };
+      s.onerror = function () { reject(new Error('Kunde inte ladda ' + src)); };
+      document.head.appendChild(s);
+    });
+  };
+
+  // Stops any animation loop and disposers registered by a previous run of
+  // this box, then empties its visual area. Called before every re-run and
+  // on delete, so boxes doing WebGL/canvas animation don't pile up.
+  function cleanupCanvas(canvasEl) {
+    if (canvasEl._rafId) {
+      cancelAnimationFrame(canvasEl._rafId);
+      canvasEl._rafId = null;
+    }
+    if (canvasEl._disposers) {
+      canvasEl._disposers.forEach(function (fn) {
+        try { fn(); } catch (e) { /* ignore cleanup errors */ }
+      });
+    }
+    canvasEl._disposers = [];
+    canvasEl.innerHTML = '';
+  }
+
+  // A box counts as "running" once its code has registered an ongoing
+  // requestAnimationFrame loop (see the el._rafId convention above) - a box
+  // that just logs something and returns is never "running" in this sense,
+  // since there's nothing left going for Stoppa to stop.
+  function isRunning(canvasEl) {
+    return !!canvasEl._rafId;
+  }
+
+  function setRunButtonState(runBtn, running) {
+    runBtn.textContent = running ? '\u25A0 Stoppa' : '\u25B6 K\u00F6r';
+    runBtn.classList.toggle('running', running);
+  }
+
+  function finalizeRun(box, outputEl, canvasEl, boxEl, output) {
+    box.output = output;
+    renderOutput(outputEl, output);
+    if (canvasEl.children.length === 0) {
+      canvasEl.classList.remove('has-content');
+    }
+    boxEl.classList.remove('pulse');
+    void boxEl.offsetWidth;
+    boxEl.classList.add('pulse');
+    schedulePersist(box.id);
+    var runBtnEl = boxEl.querySelector('.run-btn');
+    if (runBtnEl) setRunButtonState(runBtnEl, isRunning(canvasEl));
+  }
+
+  // Runs a box's code as an async function. The code receives `el`, a div it
+  // can render into (append a <canvas>, a Three.js renderer, etc.) — anything
+  // left running (requestAnimationFrame, WebGL) should be registered via
+  // el._rafId and el._disposers.push(fn) so Kanvas can clean it up later.
+  // console.log calls are captured for the whole async run, including
+  // anything logged after an `await`.
+  // Code pasted in from a chat or notes app often arrives with typographic
+  // quotes/spaces instead of plain ASCII ones, which breaks the JS parser
+  // with exactly "Invalid or unexpected token". Normalize before running.
+  function sanitizeCode(code) {
+    return code
+      .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+      .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+      .replace(/\u00A0/g, ' ');
+  }
+
+  function runBox(box, outputEl, canvasEl, boxEl) {
+    cleanupCanvas(canvasEl);
+    canvasEl.classList.add('has-content');
+    var logs = [];
+    var originalLog = console.log;
+    console.log = function () {
+      var args = Array.prototype.slice.call(arguments);
+      logs.push(args.map(stringifyArg).join(' '));
+    };
+    var wrapped;
+    try {
+      wrapped = new Function('el', 'return (async function () {\n' + sanitizeCode(box.code) + '\n})()');
+    } catch (err) {
+      console.log = originalLog;
+      finalizeRun(box, outputEl, canvasEl, boxEl, { logs: logs, hasResult: false, result: null, error: err.message });
+      return;
+    }
+    Promise.resolve().then(function () {
+      return wrapped(canvasEl);
+    }).then(function (result) {
+      console.log = originalLog;
+      finalizeRun(box, outputEl, canvasEl, boxEl, {
+        logs: logs, hasResult: result !== undefined,
+        result: result === undefined ? null : result, error: null
+      });
+    }).catch(function (err) {
+      console.log = originalLog;
+      finalizeRun(box, outputEl, canvasEl, boxEl, {
+        logs: logs, hasResult: false, result: null,
+        error: (err && err.message) || String(err)
+      });
+    });
+  }
+
+  function makeDraggable(header, box, el) {
+    var dragging = false, startX, startY, origX, origY;
+    header.addEventListener('pointerdown', function (e) {
+      if (el.classList.contains('fullscreen')) return;
+      if (e.target.closest('.delete-btn') || e.target.closest('.box-name') || e.target.closest('.box-icon-btn')) return;
+      dragging = true;
+      header.setPointerCapture(e.pointerId);
+      startX = e.clientX; startY = e.clientY;
+      origX = box.x; origY = box.y;
+      el.style.zIndex = String(++topZ);
+      el.classList.add('dragging');
+    });
+    header.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      box.x = origX + (e.clientX - startX) / zoom;
+      box.y = origY + (e.clientY - startY) / zoom;
+      el.style.left = box.x + 'px';
+      el.style.top = box.y + 'px';
+    });
+    function endDrag() {
+      if (!dragging) return;
+      dragging = false;
+      el.classList.remove('dragging');
+      schedulePersist(box.id);
+    }
+    header.addEventListener('pointerup', endDrag);
+    header.addEventListener('pointercancel', endDrag);
+  }
+
+  var ICON_BOX_EXPAND = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 3 3 3 3 8"/><polyline points="16 3 21 3 21 8"/><polyline points="3 16 3 21 8 21"/><polyline points="21 16 21 21 16 21"/></svg>';
+  var ICON_BOX_SHRINK = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><polyline points="14 20 14 14 20 14"/><polyline points="10 4 10 10 4 10"/></svg>';
+  var ICON_CODE_TOGGLE = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
+
+  // A box's normal position lives inside the zoomed/panned #canvas. Position:
+  // fixed on a descendant of a transformed ancestor is scoped to that
+  // ancestor, not the real viewport - so to get a true fullscreen box we
+  // temporarily move it out to the document body, then put it back exactly
+  // where it was (box.x/box.y are never touched, so nothing is lost).
+  function exitBoxFullscreen() {
+    if (!fullscreenBoxId) return;
+    var box = findBox(fullscreenBoxId);
+    var boxEl = document.getElementById('box-' + fullscreenBoxId);
+    if (boxEl) {
+      boxEl.classList.remove('fullscreen');
+      if (box) {
+        if (box._returnNext && box._returnNext.parentNode === canvasEl) {
+          canvasEl.insertBefore(boxEl, box._returnNext);
+        } else {
+          canvasEl.appendChild(boxEl);
+        }
+        boxEl.style.left = box.x + 'px';
+        boxEl.style.top = box.y + 'px';
+      }
+      var btn = boxEl.querySelector('.fullscreen-toggle-btn');
+      if (btn) { btn.innerHTML = ICON_BOX_EXPAND; btn.setAttribute('aria-label', 'Helskärm'); }
+    }
+    fullscreenBoxId = null;
+  }
+
+  function enterBoxFullscreen(box, boxEl) {
+    if (fullscreenBoxId && fullscreenBoxId !== box.id) exitBoxFullscreen();
+    box._returnNext = boxEl.nextSibling;
+    document.body.appendChild(boxEl);
+    boxEl.classList.add('fullscreen');
+    // The box carries inline left/top/z-index from its position on the
+    // canvas, and inline styles always beat CSS classes - without clearing
+    // them here, the .fullscreen rule's top:0/left:0 gets silently
+    // overridden and the box renders far outside the visible viewport.
+    boxEl.style.left = '';
+    boxEl.style.top = '';
+    boxEl.style.zIndex = '';
+    fullscreenBoxId = box.id;
+    var btn = boxEl.querySelector('.fullscreen-toggle-btn');
+    if (btn) { btn.innerHTML = ICON_BOX_SHRINK; btn.setAttribute('aria-label', 'Återställ'); }
+  }
+
+  function toggleBoxFullscreen(box, boxEl) {
+    if (fullscreenBoxId === box.id) exitBoxFullscreen();
+    else enterBoxFullscreen(box, boxEl);
+  }
+
+  var undoTimer = null;
+  function showUndoToast(message, action) {
+    var toast = document.getElementById('undo-toast');
+    var msgEl = document.getElementById('undo-toast-msg');
+    var btn = document.getElementById('undo-toast-btn');
+    msgEl.textContent = message;
+    toast.style.display = 'flex';
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(function () { toast.style.display = 'none'; }, 7000);
+    btn.onclick = function () {
+      clearTimeout(undoTimer);
+      toast.style.display = 'none';
+      action();
+    };
+  }
+
+  function deleteBox(id) {
+    if (fullscreenBoxId === id) fullscreenBoxId = null;
+    var box = findBox(id);
+    var snapshot = box ? {
+      id: box.id, num: box.num, name: box.name, x: box.x, y: box.y, code: box.code, output: box.output
+    } : null;
+    boxes = boxes.filter(function (b) { return b.id !== id; });
+    var boxCanvasArea = document.getElementById('canvas-' + id);
+    if (boxCanvasArea) cleanupCanvas(boxCanvasArea);
+    var el = document.getElementById('box-' + id);
+    if (el) el.remove();
+    schedulePersist();
+    if (snapshot) {
+      showUndoToast('Ruta borttagen: ' + boxDisplayName(snapshot), function () {
+        boxes.push(snapshot);
+        canvasEl.appendChild(createBoxElement(snapshot));
+        schedulePersist(snapshot.id);
+      });
+    }
+  }
+
+  function createBoxElement(box) {
+    var el = document.createElement('div');
+    el.className = 'box';
+    el.id = 'box-' + box.id;
+    el.style.left = box.x + 'px';
+    el.style.top = box.y + 'px';
+
+    var header = document.createElement('div');
+    header.className = 'box-header';
+
+    var headerLeft = document.createElement('div');
+    headerLeft.className = 'box-header-left';
+
+    var nameSpan = document.createElement('span');
+    nameSpan.className = 'box-name';
+    nameSpan.textContent = boxDisplayName(box);
+    nameSpan.setAttribute('role', 'button');
+    nameSpan.setAttribute('aria-label', 'Namnge rutan');
+    nameSpan.addEventListener('click', function () {
+      var input = prompt('Namn på rutan:', box.name || '');
+      if (input === null) return;
+      box.name = input.trim();
+      nameSpan.textContent = boxDisplayName(box);
+      schedulePersist(box.id);
+    });
+
+    var savedSpan = document.createElement('span');
+    savedSpan.className = 'box-saved';
+    savedSpan.id = 'saved-' + box.id;
+    savedSpan.textContent = '\u2713 Sparad';
+
+    headerLeft.appendChild(nameSpan);
+    headerLeft.appendChild(savedSpan);
+
+    var delBtn = document.createElement('button');
+    delBtn.className = 'delete-btn';
+    delBtn.setAttribute('aria-label', 'Ta bort ruta');
+    delBtn.textContent = '\u00D7';
+    delBtn.addEventListener('click', function () { deleteBox(box.id); });
+
+    var codeToggleBtn = document.createElement('button');
+    codeToggleBtn.className = 'box-icon-btn code-toggle-btn';
+    codeToggleBtn.innerHTML = ICON_CODE_TOGGLE;
+    codeToggleBtn.setAttribute('aria-label', 'Dölj/visa kod');
+    codeToggleBtn.addEventListener('click', function () {
+      var collapsed = el.classList.toggle('code-collapsed');
+      codeToggleBtn.classList.toggle('active', collapsed);
+    });
+
+    var fsBtn = document.createElement('button');
+    fsBtn.className = 'box-icon-btn fullscreen-toggle-btn';
+    fsBtn.innerHTML = ICON_BOX_EXPAND;
+    fsBtn.setAttribute('aria-label', 'Helskärm');
+    fsBtn.addEventListener('click', function () { toggleBoxFullscreen(box, el); });
+
+    var headerRight = document.createElement('div');
+    headerRight.style.cssText = 'display:flex; align-items:center; gap:2px; flex-shrink:0;';
+    headerRight.appendChild(codeToggleBtn);
+    headerRight.appendChild(fsBtn);
+    headerRight.appendChild(delBtn);
+
+    header.appendChild(headerLeft);
+    header.appendChild(headerRight);
+
+    var textarea = document.createElement('textarea');
+    textarea.className = 'box-code';
+    textarea.spellcheck = false;
+    textarea.value = box.code;
+    textarea.rows = 4;
+    textarea.addEventListener('input', function () {
+      box.code = textarea.value;
+      schedulePersist(box.id);
+    });
+
+    var runBtn = document.createElement('button');
+    runBtn.className = 'run-btn';
+    runBtn.textContent = '\u25B6 K\u00F6r';
+
+    var canvasArea = document.createElement('div');
+    canvasArea.className = 'box-canvas';
+    canvasArea.id = 'canvas-' + box.id;
+
+    var output = document.createElement('div');
+    output.className = 'box-output';
+    output.id = 'output-' + box.id;
+
+    runBtn.addEventListener('click', function () {
+      if (isRunning(canvasArea)) {
+        if (confirm('Sluta köra "' + boxDisplayName(box) + '"?')) {
+          cleanupCanvas(canvasArea);
+          canvasArea.classList.remove('has-content');
+          setRunButtonState(runBtn, false);
+        }
+      } else {
+        runBox(box, output, canvasArea, el);
+      }
+    });
+
+    el.appendChild(header);
+    el.appendChild(textarea);
+    el.appendChild(runBtn);
+    el.appendChild(canvasArea);
+    el.appendChild(output);
+
+    makeDraggable(header, box, el);
+
+    if (box.output) {
+      renderOutput(output, box.output);
+    } else {
+      renderOutput(output, { logs: [], hasResult: false });
+    }
+
+    return el;
+  }
+
+  function addBox() {
+    var offset = (boxes.length % 6) * 24;
+    var x = (scrollEl.scrollLeft + scrollEl.clientWidth / 2) / zoom - BOX_HALF_WIDTH + offset;
+    var y = (scrollEl.scrollTop + 70) / zoom + offset;
+    var box = {
+      id: makeId(), num: nextNum++, name: '', x: x, y: y,
+      code: '// din kod h\u00E4r\nconsole.log("hej!");',
+      output: null
+    };
+    boxes.push(box);
+    canvasEl.appendChild(createBoxElement(box));
+    schedulePersist(box.id);
+  }
+
+  function init() {
+    setStatus('Laddar…');
+    loadState().then(function () {
+      if (boxes.length === 0) {
+        boxes.push({
+          id: makeId(), num: 1, name: 'Exempel',
+          x: CANVAS_SIZE / 2 - BOX_HALF_WIDTH, y: CANVAS_SIZE / 2 - BOX_HALF_WIDTH,
+          code: 'console.log("Hej fr\u00E5n ruta 1!");\nreturn 6 * 7;',
+          output: null
+        });
+        nextNum = 2;
+      }
+      boxes.forEach(function (box) {
+        canvasEl.appendChild(createBoxElement(box));
+      });
+      requestAnimationFrame(function () {
+        scrollEl.scrollLeft = CANVAS_SIZE / 2 - scrollEl.clientWidth / 2;
+        scrollEl.scrollTop = CANVAS_SIZE / 2 - scrollEl.clientHeight / 2;
+      });
+      setStatus('');
+    });
+  }
+
+  function blurActive() {
+    var a = document.activeElement;
+    if (a && a !== document.body && typeof a.blur === 'function') a.blur();
+  }
+
+  function findBox(idOrName) {
+    if (!idOrName) return null;
+    var byId = boxes.filter(function (b) { return b.id === idOrName; })[0];
+    if (byId) return byId;
+    var lower = String(idOrName).toLowerCase();
+    return boxes.filter(function (b) { return boxDisplayName(b).toLowerCase() === lower; })[0] || null;
+  }
+
+  // A small, deliberate surface so box code (e.g. an AI-agent box) can act on
+  // Kanvas itself. Boxes still run in their own isolated scope from each
+  // other, but any box can reach these shared actions via window.KanvasAPI.
+  window.KanvasAPI = {
+    addBox: function (code, name) {
+      var offset = (boxes.length % 6) * 24;
+      var x = (scrollEl.scrollLeft + scrollEl.clientWidth / 2) / zoom - BOX_HALF_WIDTH + offset;
+      var y = (scrollEl.scrollTop + 70) / zoom + offset;
+      var box = { id: makeId(), num: nextNum++, name: name || '', x: x, y: y, code: code || '', output: null };
+      boxes.push(box);
+      canvasEl.appendChild(createBoxElement(box));
+      schedulePersist(box.id);
+      return box.id;
+    },
+    listBoxes: function () {
+      return boxes.map(function (b) { return { id: b.id, name: boxDisplayName(b) }; });
+    },
+    getBoxCode: function (idOrName) {
+      var b = findBox(idOrName);
+      return b ? b.code : null;
+    },
+    setBoxCode: function (idOrName, code) {
+      var b = findBox(idOrName);
+      if (!b) return false;
+      var prevCode = b.code;
+      var boxId = b.id;
+      b.code = code;
+      var ta = document.querySelector('#box-' + b.id + ' .box-code');
+      if (ta) ta.value = code;
+      schedulePersist(b.id);
+      showUndoToast('AI ändrade "' + boxDisplayName(b) + '"', function () {
+        var target = findBox(boxId);
+        if (!target) return;
+        target.code = prevCode;
+        var ta2 = document.querySelector('#box-' + boxId + ' .box-code');
+        if (ta2) ta2.value = prevCode;
+        schedulePersist(boxId);
+      });
+      return true;
+    },
+    runBoxById: function (idOrName) {
+      var b = findBox(idOrName);
+      if (!b) return false;
+      var boxEl = document.getElementById('box-' + b.id);
+      var outputEl = document.getElementById('output-' + b.id);
+      var canvasAreaEl = document.getElementById('canvas-' + b.id);
+      if (!boxEl || !outputEl || !canvasAreaEl) return false;
+      runBox(b, outputEl, canvasAreaEl, boxEl);
+      return true;
+    },
+    deleteBoxById: function (idOrName) {
+      var b = findBox(idOrName);
+      if (!b) return false;
+      deleteBox(b.id);
+      return true;
+    },
+    renameBox: function (idOrName, newName) {
+      var b = findBox(idOrName);
+      if (!b) return false;
+      b.name = newName;
+      var nameEl = document.querySelector('#box-' + b.id + ' .box-name');
+      if (nameEl) nameEl.textContent = boxDisplayName(b);
+      schedulePersist(b.id);
+      return true;
+    },
+    storageGet: function (key) { return storageAdapter.get('kanvas-ext-' + key); },
+    storageSet: function (key, value) { return storageAdapter.set('kanvas-ext-' + key, value); },
+    storageDelete: function (key) { return storageAdapter.delete('kanvas-ext-' + key); }
+  };
+
+  // ---- Settings dropdown (hitta ruta / flytta till annan enhet) ----
+  var settingsBtnEl = document.getElementById('settingsBtn');
+  var settingsMenuEl = document.getElementById('settings-menu');
+
+  settingsBtnEl.addEventListener('click', function () {
+    blurActive();
+    if (settingsMenuEl.style.display === 'block') {
+      settingsMenuEl.style.display = 'none';
+      return;
+    }
+    var rect = settingsBtnEl.getBoundingClientRect();
+    settingsMenuEl.style.top = (rect.bottom + 6) + 'px';
+    settingsMenuEl.style.left = rect.left + 'px';
+    settingsMenuEl.style.display = 'block';
+  });
+  document.addEventListener('click', function (e) {
+    if (settingsMenuEl.style.display === 'block' &&
+        !settingsMenuEl.contains(e.target) && e.target !== settingsBtnEl && !settingsBtnEl.contains(e.target)) {
+      settingsMenuEl.style.display = 'none';
+    }
+  });
+
+  function jumpToBox() {
+    if (boxes.length === 0) { alert('Inga rutor att hitta.'); return; }
+    var list = boxes.map(function (b, i) { return (i + 1) + '. ' + boxDisplayName(b); }).join('\n');
+    var choice = prompt('Skriv namn eller nummer på rutan:\n' + list);
+    if (!choice) return;
+    choice = choice.trim();
+    var target = null;
+    var asNum = parseInt(choice, 10);
+    if (!isNaN(asNum) && String(asNum) === choice && asNum >= 1 && asNum <= boxes.length) {
+      target = boxes[asNum - 1];
+    } else {
+      target = findBox(choice);
+    }
+    if (!target) { alert('Hittade ingen ruta med det namnet.'); return; }
+    var cx = (target.x + BOX_HALF_WIDTH) * zoom;
+    var cy = (target.y + 110) * zoom;
+    scrollEl.scrollLeft = cx - scrollEl.clientWidth / 2;
+    scrollEl.scrollTop = cy - scrollEl.clientHeight / 2;
+    var boxEl = document.getElementById('box-' + target.id);
+    if (boxEl) {
+      boxEl.classList.remove('pulse');
+      void boxEl.offsetWidth;
+      boxEl.classList.add('pulse');
+    }
+  }
+
+  document.getElementById('menuFind').addEventListener('click', function () {
+    settingsMenuEl.style.display = 'none';
+    jumpToBox();
+  });
+  document.getElementById('menuTransfer').addEventListener('click', function () {
+    settingsMenuEl.style.display = 'none';
+    document.getElementById('transfer-export-area').value = '';
+    document.getElementById('transfer-import-area').value = '';
+    document.getElementById('transfer-status').textContent = '';
+    document.getElementById('transfer-overlay').style.display = 'flex';
+  });
+
+  // ---- Debug console (Eruda) - off by default, toggled from settings ----
+  var erudaScriptLoading = null;
+  var erudaActive = false;
+  var erudaInitialized = false;
+  var menuDebugEl = document.getElementById('menuDebug');
+
+  function loadErudaScript() {
+    if (window.eruda) return Promise.resolve();
+    if (erudaScriptLoading) return erudaScriptLoading;
+    erudaScriptLoading = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/eruda';
+      s.onload = function () { resolve(); };
+      s.onerror = function () { reject(new Error('Kunde inte ladda felsökningskonsolen.')); };
+      document.head.appendChild(s);
+    });
+    return erudaScriptLoading;
+  }
+
+  function updateDebugLabel() {
+    menuDebugEl.textContent = 'Felsökningskonsol: ' + (erudaActive ? 'På' : 'Av');
+  }
+
+  async function enableEruda() {
+    try {
+      await loadErudaScript();
+      if (!erudaInitialized) {
+        window.eruda.init({ useShadowDom: true });
+        erudaInitialized = true;
+      }
+      window.eruda.position({ x: 16, y: 66 });
+      window.eruda.show();
+      erudaActive = true;
+    } catch (e) {
+      alert('Kunde inte starta felsökningskonsolen: ' + e.message);
+    }
+    updateDebugLabel();
+  }
+
+  function disableEruda() {
+    if (window.eruda && typeof window.eruda.hide === 'function') {
+      try { window.eruda.hide(); } catch (e) {}
+    }
+    erudaActive = false;
+    updateDebugLabel();
+  }
+
+  menuDebugEl.addEventListener('click', function () {
+    settingsMenuEl.style.display = 'none';
+    if (erudaActive) {
+      disableEruda();
+      storageAdapter.set('kanvas-debug-enabled', 'false');
+    } else {
+      enableEruda();
+      storageAdapter.set('kanvas-debug-enabled', 'true');
+    }
+  });
+
+  (async function initDebugConsole() {
+    try {
+      var pref = await storageAdapter.get('kanvas-debug-enabled');
+      if (pref && pref.value === 'true') {
+        await enableEruda();
+      }
+    } catch (e) { /* stays off by default */ }
+  })();
+
+  // ---- Move to another device (export/import everything Kanvas has stored) ----
+  function utf8ToBase64(str) {
+    var bytes = new TextEncoder().encode(str);
+    var binary = '';
+    for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+  function base64ToUtf8(b64) {
+    var binary = atob(b64);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  }
+
+  async function exportState() {
+    var listResult = await storageAdapter.list('kanvas-');
+    var keys = (listResult && listResult.keys) || [];
+    var data = {};
+    for (var i = 0; i < keys.length; i++) {
+      var r = await storageAdapter.get(keys[i]);
+      if (r && r.value !== undefined && r.value !== null) data[keys[i]] = r.value;
+    }
+    return utf8ToBase64(JSON.stringify({ v: 1, data: data }));
+  }
+
+  async function importState(code) {
+    var parsed = JSON.parse(base64ToUtf8(code));
+    if (!parsed || !parsed.data || typeof parsed.data !== 'object') {
+      throw new Error('Ogiltig kod');
+    }
+    var keys = Object.keys(parsed.data);
+    for (var i = 0; i < keys.length; i++) {
+      await storageAdapter.set(keys[i], parsed.data[keys[i]]);
+    }
+  }
+
+  document.getElementById('transfer-close').addEventListener('click', function () {
+    document.getElementById('transfer-overlay').style.display = 'none';
+  });
+
+  document.getElementById('transfer-export-btn').addEventListener('click', async function () {
+    var btn = this;
+    var area = document.getElementById('transfer-export-area');
+    btn.disabled = true;
+    btn.textContent = 'Skapar...';
+    try {
+      area.value = await exportState();
+    } catch (e) {
+      area.value = '';
+      document.getElementById('transfer-status').style.color = '#D96C6C';
+      document.getElementById('transfer-status').textContent = 'Kunde inte skapa export.';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Skapa kod';
+  });
+
+  document.getElementById('transfer-copy-btn').addEventListener('click', function () {
+    var area = document.getElementById('transfer-export-area');
+    if (!area.value) return;
+    area.focus();
+    area.select();
+    var done = function () {
+      var btn = document.getElementById('transfer-copy-btn');
+      var original = 'Kopiera';
+      btn.textContent = 'Kopierat!';
+      setTimeout(function () { btn.textContent = original; }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(area.value).then(done).catch(function () {
+        try { document.execCommand('copy'); done(); } catch (e) {}
+      });
+    } else {
+      try { document.execCommand('copy'); done(); } catch (e) {}
+    }
+  });
+
+  document.getElementById('transfer-import-btn').addEventListener('click', async function () {
+    var btn = this;
+    var code = document.getElementById('transfer-import-area').value.trim();
+    var statusEl = document.getElementById('transfer-status');
+    if (!code) return;
+    if (!confirm('Detta skriver över allt som redan finns på den här enheten (rutor, kod, namn, kod-lås). Fortsätt?')) return;
+    btn.disabled = true;
+    btn.textContent = 'Importerar...';
+    try {
+      await importState(code);
+      statusEl.style.color = '#8FBC94';
+      statusEl.textContent = 'Klart, laddar om...';
+      setTimeout(function () { window.location.reload(); }, 700);
+    } catch (e) {
+      statusEl.style.color = '#D96C6C';
+      statusEl.textContent = 'Kunde inte importera - kontrollera att hela koden klistrades in.';
+      btn.disabled = false;
+      btn.textContent = 'Importera och ladda om';
+    }
+  });
+
+  document.getElementById('addBtn').addEventListener('click', function () { blurActive(); addBox(); });
+  document.getElementById('zoomInBtn').addEventListener('click', function () { blurActive(); applyZoom(zoom * 1.25); });
+  document.getElementById('zoomOutBtn').addEventListener('click', function () { blurActive(); applyZoom(zoom / 1.25); });
+  document.getElementById('zoomLabel').addEventListener('click', function () { blurActive(); applyZoom(1); });
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(function () {
+      // Not available in this context (e.g. the sandboxed Claude preview) -
+      // harmless here, only matters once the file is actually hosted.
+    });
+  }
+
+  init();
+})();
+</script>
+  <script>
+(function () {
+  "use strict";
+
+  var STORAGE_KEY = 'home-chat';
+  var API_KEY = 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;
+
+  var style = document.createElement('style');
+  style.textContent = `
+    #home-ai-btn {
+      position: fixed; left: 16px; bottom: 16px; z-index: 1200;
+      width: 52px; height: 52px; border-radius: 50%;
+      background: #E8A33D; border: none; color: #0F1720;
+      font-size: 22px; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #home-ai-btn:active { background: #C6842A; }
+    #home-ai-panel {
+      display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 1250;
+      height: min(60vh, 520px); background: #16212B; border-top: 1px solid #2A3B47;
+      border-radius: 16px 16px 0 0; flex-direction: column;
+      box-shadow: 0 -4px 24px rgba(0,0,0,0.5);
+      font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #DCE6EC;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    #home-ai-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 14px; border-bottom: 1px solid #2A3B47; flex-shrink: 0;
+    }
+    #home-ai-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; }
+    #home-ai-close { background: none; border: none; color: #7C93A3; font-size: 20px; cursor: pointer; }
+    #home-ai-log { flex: 1; overflow-y: auto; padding: 10px 14px; -webkit-overflow-scrolling: touch; }
+    #home-ai-log div { margin-bottom: 8px; white-space: pre-wrap; word-break: break-word; }
+    #home-ai-row { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid #2A3B47; flex-shrink: 0; }
+    #home-ai-input {
+      flex: 1; background: #0F1720; color: #DCE6EC; border: 1px solid #2A3B47;
+      border-radius: 8px; padding: 10px; font-family: inherit; font-size: 13px;
+    }
+    #home-ai-send {
+      background: #E8A33D; color: #0F1720; border: none; border-radius: 8px;
+      padding: 10px 14px; font-weight: 600; cursor: pointer; font-family: 'Space Grotesk', sans-serif;
+    }
+  `;
+  document.head.appendChild(style);
+
+  var btn = document.createElement('button');
+  btn.id = 'home-ai-btn';
+  btn.setAttribute('aria-label', 'Öppna AI-chatt');
+  btn.textContent = '💬';
+  document.body.appendChild(btn);
+
+  var panel = document.createElement('div');
+  panel.id = 'home-ai-panel';
+  panel.innerHTML =
+    '<div id="home-ai-header"><span id="home-ai-title">AI-ASSISTENT</span><button id="home-ai-close" aria-label="Stäng">&times;</button></div>' +
+    '<div id="home-ai-log"></div>' +
+    '<div id="home-ai-row"><input id="home-ai-input" placeholder="Skriv ett kommando..."/><button id="home-ai-send">Skicka</button></div>';
+  document.body.appendChild(panel);
+
+  var log = panel.querySelector('#home-ai-log');
+  var input = panel.querySelector('#home-ai-input');
+  var sendBtn = panel.querySelector('#home-ai-send');
+
+  btn.addEventListener('click', function () { panel.style.display = 'flex'; input.focus(); });
+  panel.querySelector('#home-ai-close').addEventListener('click', function () { panel.style.display = 'none'; });
+
+  function addMsg(role, text) {
+    var m = document.createElement('div');
+    m.style.color = role === 'user' ? '#8FBC94' : (role === 'system' ? '#7C93A3' : '#DCE6EC');
+    m.textContent = (role === 'user' ? '> ' : '') + text;
+    log.appendChild(m);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function resolveId(idOrName) {
+    var list = window.KanvasAPI.listBoxes();
+    var byId = list.filter(function (b) { return b.id === idOrName; })[0];
+    if (byId) return byId.id;
+    var lower = String(idOrName).toLowerCase();
+    var byName = list.filter(function (b) { return b.name.toLowerCase() === lower; })[0];
+    return byName ? byName.id : idOrName;
+  }
+
+  var tools = [
+    { name: 'list_boxes', description: 'Lista alla rutor med id och namn.', input_schema: { type: 'object', properties: {} } },
+    { name: 'get_box_code', description: 'Hämta koden i en ruta.', input_schema: { type: 'object', properties: { idOrName: { type: 'string' } }, required: ['idOrName'] } },
+    { name: 'get_box_output', description: 'Hämta senaste utskrift/fel från en ruta.', input_schema: { type: 'object', properties: { idOrName: { type: 'string' } }, required: ['idOrName'] } },
+    { name: 'set_box_code', description: 'Skriv över koden i en befintlig ruta.', input_schema: { type: 'object', properties: { idOrName: { type: 'string' }, code: { type: 'string' } }, required: ['idOrName','code'] } },
+    { name: 'add_box', description: 'Skapa en ny ruta med kod och valfritt namn.', input_schema: { type: 'object', properties: { code: { type: 'string' }, name: { type: 'string' } }, required: ['code'] } },
+    { name: 'run_box', description: 'Kör koden i en ruta.', input_schema: { type: 'object', properties: { idOrName: { type: 'string' } }, required: ['idOrName'] } },
+    { name: 'delete_box', description: 'Ta bort en ruta.', input_schema: { type: 'object', properties: { idOrName: { type: 'string' } }, required: ['idOrName'] } },
+    { name: 'rename_box', description: 'Byt namn på en ruta.', input_schema: { type: 'object', properties: { idOrName: { type: 'string' }, newName: { type: 'string' } }, required: ['idOrName','newName'] } }
+  ];
+
+  function runTool(name, inp) {
+    try {
+      switch (name) {
+        case 'list_boxes': return { ok: true, boxes: window.KanvasAPI.listBoxes() };
+        case 'get_box_code': return { ok: true, code: window.KanvasAPI.getBoxCode(inp.idOrName) };
+        case 'get_box_output': {
+          var outEl = document.getElementById('output-' + resolveId(inp.idOrName));
+          return { ok: true, output: outEl ? outEl.innerText : null };
+        }
+        case 'set_box_code': return { ok: window.KanvasAPI.setBoxCode(inp.idOrName, inp.code) };
+        case 'add_box': return { ok: true, id: window.KanvasAPI.addBox(inp.code, inp.name) };
+        case 'run_box': return { ok: window.KanvasAPI.runBoxById(inp.idOrName) };
+        case 'delete_box': return { ok: window.KanvasAPI.deleteBoxById(inp.idOrName) };
+        case 'rename_box': return { ok: window.KanvasAPI.renameBox(inp.idOrName, inp.newName) };
+        default: return { ok: false, error: 'Okänt verktyg: ' + name };
+      }
+    } catch (e) { return { ok: false, error: e.message }; }
+  }
+
+  var messages = [];
+  var systemPrompt = "Du är en AI-assistent inbyggd i appen Kanvas, tillgänglig från en global chatt på hemskärmen (inte knuten till någon specifik ruta). Du styr appen via verktygen: skapa, läsa, ändra, köra, döpa om och ta bort rutor (boxes), samt läsa deras senaste output/fel. Varje ruta innehåller JS-kod som körs som en async-funktion med parametern 'el'. VIKTIGT - automatisk felrättning: när du skapar en ny ruta eller ändrar kod i en befintlig, ska du ALLTID direkt efter: 1) köra rutan, 2) läsa resultatet, 3) om det blev fel, rätta koden och upprepa, i upp till 4 försök, utan att fråga om lov mellan varje försök. Berätta bara för användaren när det är klart eller om du gett upp. Svara kort.";
+
+  function saveHistory() {
+    try { window.KanvasAPI.storageSet(STORAGE_KEY, JSON.stringify(messages.slice(-40))); } catch (e) {}
+  }
+
+  async function sendToClaude() {
+    var res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': API_KEY,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, system: systemPrompt, messages: messages, tools: tools })
+    });
+    return res.json();
+  }
+
+  async function handleTurn() {
+    var guard = 0;
+    while (guard++ < 10) {
+      var data = await sendToClaude();
+      if (!data || !data.content) { addMsg('system', 'Fel: kunde inte tolka svaret.'); return; }
+      var toolUses = [], textParts = [];
+      data.content.forEach(function (b) {
+        if (b.type === 'text') textParts.push(b.text);
+        if (b.type === 'tool_use') toolUses.push(b);
+      });
+      if (textParts.length) addMsg('ai', textParts.join('\n'));
+      messages.push({ role: 'assistant', content: data.content });
+      saveHistory();
+      if (toolUses.length === 0) return;
+      var toolResults = toolUses.map(function (tu) {
+        var result = runTool(tu.name, tu.input || {});
+        addMsg('system', '\u2192 ' + tu.name + '(' + JSON.stringify(tu.input) + ') = ' + JSON.stringify(result));
+        return { type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(result) };
+      });
+      messages.push({ role: 'user', content: toolResults });
+      saveHistory();
+    }
+    addMsg('system', 'Avbröt efter för många steg.');
+  }
+
+  function send() {
+    var text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    addMsg('user', text);
+    messages.push({ role: 'user', content: text });
+    saveHistory();
+    sendBtn.disabled = true;
+    handleTurn().catch(function (e) { addMsg('system', 'Fel: ' + e.message); })
+      .then(function () { sendBtn.disabled = false; });
+  }
+
+  sendBtn.addEventListener('click', send);
+  input.addEventListener('keydown', function (e) { if (e.key === 'Enter') send(); });
+
+  window.KanvasAPI.storageGet(STORAGE_KEY).then(function (r) {
+    if (r && r.value) {
+      try {
+        messages = JSON.parse(r.value);
+        messages.forEach(function (m) {
+          if (m.role === 'user' && typeof m.content === 'string') addMsg('user', m.content);
+          if (m.role === 'assistant') {
+            var texts = (m.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; });
+            if (texts.length) addMsg('ai', texts.join('\n'));
+          }
+        });
+      } catch (e) {}
+    }
+  });
+})();
+</script>
+</body>
+</html>
