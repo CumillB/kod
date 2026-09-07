@@ -148,4 +148,4 @@ window.KanvasAPI.storageGet(STORAGE_KEY).then(function (r) {
   addMsg('system', 'AI-assistenten är redo. Prova t.ex. "gör en ny ruta som ritar en roterande kub".');
 }).catch(function () {
   addMsg('system', 'AI-assistenten är redo.');
-});
+});AAO6N6kawNlo6t7JukYJfdhxPuSVm-mkovdgiN8YW42HQXCM1U72COv61ddOEFxBBd_A-S5MkBAAA
