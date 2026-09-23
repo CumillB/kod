@@ -1,0 +1,10 @@
+```javascript
+if(!data||!data.content){addMsg('system','Fel');return;}
+```
+
+Byt ut den mot:
+```javascript
+if(!data){addMsg('system','Fel: Inget svar från API');return;}
+if(data.error){addMsg('system','Fel: '+data.error.message);return;}
+if(!data.content){addMsg('system','Fel: Tomt svar');return;}
+```
