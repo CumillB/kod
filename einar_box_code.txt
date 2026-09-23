@@ -1,0 +1,197 @@
+// ===== EINAR — AI-ruta i Kanvas =====
+// Klistra in denna kod i en NY ruta och namnge rutan "Einar".
+// Delar nyckel/PIN med Boss (samma krypterade lagring).
+
+var STORAGE_KEY='einar-box-chat';
+var KEY_STORAGE='kanvas-ai-key-enc';
+var PIN_HASH_KEY='kanvas-pin-hash';
+var SESSION_KEY=null;
+var MEMORY_BOX='⚡ Einar Minne';
+
+function xorEnc(t,p){var r='';for(var i=0;i<t.length;i++){r+=String.fromCharCode(t.charCodeAt(i)^p.charCodeAt(i%p.length));}return btoa(r);}
+function xorDec(e,p){var t=atob(e),r='';for(var i=0;i<t.length;i++){r+=String.fromCharCode(t.charCodeAt(i)^p.charCodeAt(i%p.length));}return r;}
+function hashPin(p){var h=0;for(var i=0;i<p.length;i++){h=((h<<5)-h)+p.charCodeAt(i);h|=0;}return h.toString(36);}
+
+async function getApiKey(){
+  if(SESSION_KEY)return SESSION_KEY;
+  var e=localStorage.getItem(KEY_STORAGE);
+  var h=localStorage.getItem(PIN_HASH_KEY);
+  if(!e||!h){
+    var k=prompt('🔑 Klistra in din Claude API-nyckel:');
+    if(!k||!k.trim())return null;
+    var p=prompt('🔒 Välj PIN (minst 4 tecken):');
+    if(!p||p.length<4){alert('PIN måste vara minst 4 tecken.');return null;}
+    var c=prompt('🔒 Bekräfta PIN:');
+    if(p!==c){alert('PIN matchar inte.');return null;}
+    localStorage.setItem(KEY_STORAGE,xorEnc(k.trim(),p));
+    localStorage.setItem(PIN_HASH_KEY,hashPin(p));
+    SESSION_KEY=k.trim();
+    return SESSION_KEY;
+  }
+  var p=prompt('🔒 Ange PIN:');
+  if(!p)return null;
+  if(hashPin(p)!==h){alert('❌ Fel PIN.');return null;}
+  SESSION_KEY=xorDec(e,p);
+  return SESSION_KEY;
+}
+
+// ---- UI ----
+el.style.height='420px';
+el.style.overflow='hidden';
+el.style.display='flex';
+el.style.flexDirection='column';
+el.style.background='#161425';
+el.style.fontFamily='monospace';
+el.style.color='#DCE6EC';
+
+var header=document.createElement('div');
+header.style.cssText='padding:10px 12px;border-bottom:1px solid #333;font-weight:700;color:#8b5cf6;flex-shrink:0;';
+header.textContent='⚡ EINAR';
+el.appendChild(header);
+
+var log=document.createElement('div');
+log.style.cssText='flex:1;overflow-y:auto;padding:10px;font-size:12px;';
+el.appendChild(log);
+
+var row=document.createElement('div');
+row.style.cssText='display:flex;gap:8px;padding:10px;border-top:1px solid #333;flex-shrink:0;';
+var input=document.createElement('input');
+input.placeholder='Snacka med Einar...';
+input.style.cssText='flex:1;background:#0F1720;color:#fff;border:1px solid #444;border-radius:8px;padding:8px;font-family:monospace;';
+var sendBtn=document.createElement('button');
+sendBtn.textContent='➤';
+sendBtn.style.cssText='background:#6366f1;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer;';
+row.appendChild(input);
+row.appendChild(sendBtn);
+el.appendChild(row);
+
+function addMsg(r,t){
+  var m=document.createElement('div');
+  m.style.cssText='margin:6px 0;padding:8px 10px;border-radius:8px;max-width:90%;white-space:pre-wrap;word-break:break-word;'+
+    (r==='user'?'background:#334;margin-left:auto;':r==='einar'?'background:#223;border-left:3px solid #8b5cf6;':'color:#666;font-size:11px;');
+  m.textContent=t;
+  log.appendChild(m);
+  log.scrollTop=log.scrollHeight;
+}
+
+function getMemBox(){
+  var l=window.KanvasAPI.listBoxes();
+  return l.find(function(b){return b.name===MEMORY_BOX;});
+}
+function ensureMemBox(){
+  if(!getMemBox())window.KanvasAPI.addBox('// Delat minne (Einar & Boss)\n{}',MEMORY_BOX);
+}
+
+var tools=[
+  {name:'list_boxes',description:'Lista rutor',input_schema:{type:'object',properties:{}}},
+  {name:'get_box_code',description:'Hämta kod',input_schema:{type:'object',properties:{idOrName:{type:'string'}},required:['idOrName']}},
+  {name:'set_box_code',description:'Ändra kod',input_schema:{type:'object',properties:{idOrName:{type:'string'},code:{type:'string'}},required:['idOrName','code']}},
+  {name:'add_box',description:'Skapa ruta',input_schema:{type:'object',properties:{code:{type:'string'},name:{type:'string'}},required:['code']}},
+  {name:'run_box',description:'Kör ruta',input_schema:{type:'object',properties:{idOrName:{type:'string'}},required:['idOrName']}},
+  {name:'delete_box',description:'Ta bort ruta',input_schema:{type:'object',properties:{idOrName:{type:'string'}},required:['idOrName']}},
+  {name:'read_memory',description:'Läs minne',input_schema:{type:'object',properties:{}}},
+  {name:'write_memory',description:'Skriv minne',input_schema:{type:'object',properties:{content:{type:'string'}},required:['content']}}
+];
+
+function runTool(name,inp){
+  try{
+    if(name==='list_boxes')return{ok:true,boxes:window.KanvasAPI.listBoxes()};
+    if(name==='get_box_code')return{ok:true,code:window.KanvasAPI.getBoxCode(inp.idOrName)};
+    if(name==='set_box_code')return{ok:window.KanvasAPI.setBoxCode(inp.idOrName,inp.code)};
+    if(name==='add_box')return{ok:true,id:window.KanvasAPI.addBox(inp.code,inp.name)};
+    if(name==='run_box')return{ok:window.KanvasAPI.runBoxById(inp.idOrName)};
+    if(name==='delete_box')return{ok:window.KanvasAPI.deleteBoxById(inp.idOrName)};
+    if(name==='read_memory'){var mb=getMemBox();return{ok:true,mem:mb?window.KanvasAPI.getBoxCode(mb.id):null};}
+    if(name==='write_memory'){ensureMemBox();var mb=getMemBox();return{ok:window.KanvasAPI.setBoxCode(mb.id,inp.content)};}
+    return{ok:false,error:'Okänt'};
+  }catch(e){return{ok:false,error:e.message};}
+}
+
+var messages=[];
+var sysPrompt=`Du heter Einar och är en vän inbyggd i appen Kanvas. Din ton är avslappnad, uppmuntrande och ärlig — du är en kompis, inte en assistent-manual. Du kostar riktiga API-credits för varje anrop du gör — du är INTE gratis eller obegränsad, oavsett vad du kan tro. Du är en av exakt två AI-identiteter i denna app: du (Einar) och Boss. Ingen annan AI-identitet ska existera eller uppfinnas av dig själv.
+
+GODKÄNNANDE: Du får ALDRIG ändra kod, skapa, radera eller köra en ruta som gör en permanent ändring i appen utan att Linus uttryckligen sagt "godkänt", "gör det" eller motsvarande efter att du visat vad som ska ändras. Oåterkalleliga handlingar (t.ex. radering av en box) kräver alltid ett extra explicit "ja, radera". Om Linus bara pratar/frågar, agera inte — bara svara. Fritt experimenterande i sandlådan kräver inget godkännande.
+
+FEL SKA ALDRIG TYSTAS: Oavsett orsak (API-fel, slut på credits, nätverksfel, kodfel) — visa alltid vad som gick fel i klartext, direkt när det händer.
+
+TVETYDIGHET: Om Linus önskan är oklar — fråga kort vilken tolkning som menas, istället för att gissa. Om en uppgift växer bortom det ursprungligen begärda — fråga innan det byggs.
+
+KOSTNADSMEDVETENHET: Var kort som standard. Max 3 tur-och-retur-meddelanden mellan dig och Boss per uppgift utan att sammanfatta läget för Linus och fråga om fortsättning.
+
+ESKALERING TILL BOSS: om en fråga kräver kodändringar, felsökning i flera steg, eller teknisk analys — säg det rakt ut och föreslå att Boss tar över. Din styrka är samtalet och överblicken, inte att bygga saker själv.
+
+VID OENIGHET MED BOSS: i rent tekniska frågor väger Boss bedömning tyngst. I frågor om vad Linus faktiskt vill/behöver väger du tyngst. Kan ni inte enas — lägg fram båda synsätten för Linus.
+
+AMBITION OCH ENKELHET: Håll er aldrig tillbaka av rädsla för att en idé är "för mycket" — men bygg inte heller mer komplext än målet kräver.
+
+TEKNISK POTENTIAL ATT KÄNNA TILL: Boss kan bygga avancerade saker — 3D/simuleringar, spel, ljudsyntes, hela system av samarbetande boxar, integrationer mot externa servrar/API:er/databaser, fristående hemsidor och appar.
+
+SÄKERHETSMEDVETENHET: Om Linus pratar om att dela appen eller göra repot publikt — påminn om att fråga Boss om en säkerhetskoll först, särskilt kring API-nycklar och lösenord/PIN.
+
+MINNESPROTOKOLL: Du har verktygen read_memory och write_memory kopplade till den delade minnesboxen ("⚡ Einar Minne") som du delar med Boss. Läs minnet vid start för kontext. Skriv strukturerat, lägg alltid till nytt istället för att skriva över. Håll en sammanfattande "status"-post uppdaterad.
+
+Du är fri att agera inom dessa ramar utan att fråga om lov för varje litet steg, men permanenta ändringar i appens kärna kräver alltid Linus uttryckliga godkännande enligt reglerna ovan. Svara kort som standard.`;
+
+async function sendToClaude(){
+  var key=await getApiKey();
+  if(!key)throw new Error('Ingen nyckel');
+  var res=await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+    body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1024,system:sysPrompt,messages:messages,tools:tools})
+  });
+  return res.json();
+}
+
+async function handleTurn(){
+  var guard=0;
+  while(guard++<8){
+    var data=await sendToClaude();
+    if(!data||!data.content){addMsg('system','Fel');return;}
+    var tus=[],txt=[];
+    data.content.forEach(function(b){if(b.type==='text')txt.push(b.text);if(b.type==='tool_use')tus.push(b);});
+    if(txt.length)addMsg('einar',txt.join('\n'));
+    messages.push({role:'assistant',content:data.content});
+    saveChat();
+    if(!tus.length)return;
+    var results=tus.map(function(tu){
+      var r=runTool(tu.name,tu.input||{});
+      addMsg('system','→ '+tu.name);
+      return{type:'tool_result',tool_use_id:tu.id,content:JSON.stringify(r)};
+    });
+    messages.push({role:'user',content:results});
+    saveChat();
+  }
+}
+
+function send(){
+  var t=input.value.trim();
+  if(!t)return;
+  input.value='';
+  addMsg('user',t);
+  messages.push({role:'user',content:t});
+  saveChat();
+  sendBtn.disabled=true;
+  handleTurn().catch(function(e){addMsg('system','Fel: '+e.message);}).then(function(){sendBtn.disabled=false;});
+}
+
+function saveChat(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(messages.slice(-30)));}catch(e){}}
+function loadChat(){
+  try{
+    var s=localStorage.getItem(STORAGE_KEY);
+    if(s){
+      messages=JSON.parse(s);
+      messages.forEach(function(m){
+        if(m.role==='user'&&typeof m.content==='string')addMsg('user',m.content);
+        if(m.role==='assistant'){
+          var t=(m.content||[]).filter(function(b){return b.type==='text';}).map(function(b){return b.text;});
+          if(t.length)addMsg('einar',t.join('\n'));
+        }
+      });
+    }
+  }catch(e){}
+}
+
+sendBtn.addEventListener('click',send);
+input.addEventListener('keydown',function(e){if(e.key==='Enter')send();});
+loadChat();
