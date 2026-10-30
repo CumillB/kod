@@ -1,0 +1,8 @@
+{
+    "persistence": [
+        {
+            "image": "/kali-live-amd64.iso",
+            "backend": "/kali_persistence.dat"
+        }
+    ]
+}
