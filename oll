@@ -1,0 +1,270 @@
+// Kanvas AI-ruta: chatt mot Ollama. Vanilla JS, inga imports. Körs med new Function('el', code)(container)
+const PRESETS = [
+  { name: 'Kodhjälp (vanilla JS)', text: "Du är en expert på JavaScript. Skriv alltid ren vanilla JavaScript utan imports, exports, ramverk eller build-steg, så att koden kan köras direkt via new Function('el', code)(container) där el är en container-div. Svara kort på svenska och visa koden i kodblock." },
+  { name: 'Svensk chatt', text: 'Du är en hjälpsam assistent. Svara på svenska, kort och tydligt.' },
+  { name: 'Översättare', text: 'Du är en översättare. Översätt text mellan svenska och engelska. Svara bara med översättningen.' },
+  { name: 'Genealogi', text: 'Du hjälper till att tyda och transkribera gamla svenska och danska kyrkböcker och släktdata. Förklara gamla ord och förkortningar och var tydlig med vad som är osäkert.' }
+];
+const LS = 'kanvas_ai_ruta_v1';
+const DEF = { url: 'http://localhost:11434', model: 'qwen2.5:7b', system: PRESETS[0].text, temp: 0.7, ctx: 4096, keep: '10m', font: 14 };
+
+let cfg = Object.assign({}, DEF), history = [], busy = false, ctrl = null;
+try {
+  const s = JSON.parse(localStorage.getItem(LS) || '{}');
+  if (s.cfg) cfg = Object.assign(cfg, s.cfg);
+  if (Array.isArray(s.history)) history = s.history;
+} catch (e) {}
+function save() {
+  try { localStorage.setItem(LS, JSON.stringify({ cfg, history: history.slice(-60) })); } catch (e) {}
+}
+
+const css = `
+.kai{--bg:#0f1117;--p:#171a23;--b:#262b3a;--t:#e6e8ef;--m:#8b93a7;--a:#7c5cff;--a2:#4fd1c5;position:relative;width:100%;height:100%;min-height:320px;display:flex;flex-direction:column;background:var(--bg);color:var(--t);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;border-radius:10px;overflow:hidden;box-sizing:border-box}
+.kai *{box-sizing:border-box}
+.kai-h{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--p);border-bottom:1px solid var(--b)}
+.kai-dot{width:9px;height:9px;border-radius:50%;background:#e5484d;flex:none}
+.kai-dot.ok{background:#3ecf8e}
+.kai-title{font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kai-title small{color:var(--m);font-weight:400;margin-left:6px}
+.kai button,.kai select,.kai input,.kai textarea{font:inherit;color:var(--t)}
+.kai-ib{background:none;border:1px solid var(--b);border-radius:8px;padding:4px 9px;cursor:pointer;color:var(--m)}
+.kai-ib:hover{color:var(--t);border-color:var(--a)}
+.kai-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px;scroll-behavior:smooth}
+.kai-m{max-width:92%;padding:8px 12px;border-radius:14px;word-wrap:break-word;overflow-wrap:anywhere}
+.kai-m.user{align-self:flex-end;background:var(--a);color:#fff;border-bottom-right-radius:4px}
+.kai-m.assistant{align-self:flex-start;background:var(--p);border:1px solid var(--b);border-bottom-left-radius:4px}
+.kai-m.err{border-color:#e5484d;color:#ffb4b6}
+.kai-st{font-size:11px;color:var(--m);margin-top:4px}
+.kai-m code{background:#0b0d12;padding:1px 5px;border-radius:5px;font:12px ui-monospace,Consolas,monospace}
+.kai-code{margin:6px 0;background:#0b0d12;border:1px solid var(--b);border-radius:8px;overflow:hidden}
+.kai-ch{display:flex;justify-content:space-between;align-items:center;padding:3px 8px;background:#13161e;color:var(--m);font-size:11px}
+.kai-ch button{background:none;border:none;color:var(--a2);cursor:pointer;font-size:11px}
+.kai-code pre{margin:0;padding:8px 10px;overflow-x:auto;font:12px/1.45 ui-monospace,Consolas,monospace;color:#d6deeb;white-space:pre}
+.kai-empty{margin:auto;text-align:center;color:var(--m);padding:20px}
+.kai-empty b{display:block;color:var(--t);font-size:16px;margin-bottom:4px}
+.kai-c{display:flex;gap:8px;padding:8px;background:var(--p);border-top:1px solid var(--b);align-items:flex-end}
+.kai-c textarea{flex:1;resize:none;max-height:140px;min-height:38px;background:var(--bg);border:1px solid var(--b);border-radius:10px;padding:8px 10px;outline:none}
+.kai-c textarea:focus{border-color:var(--a)}
+.kai-send{background:var(--a);border:none;border-radius:10px;padding:0 16px;height:38px;cursor:pointer;color:#fff;font-weight:600}
+.kai-send.stop{background:#e5484d}
+.kai-set{position:absolute;inset:0;background:var(--bg);z-index:5;display:none;flex-direction:column}
+.kai-set.open{display:flex}
+.kai-sb{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.kai-f label{display:block;font-size:12px;color:var(--m);margin-bottom:4px}
+.kai-f input[type=text],.kai-f select,.kai-f textarea{width:100%;background:var(--p);border:1px solid var(--b);border-radius:8px;padding:7px 9px;outline:none}
+.kai-f textarea{min-height:90px;resize:vertical}
+.kai-f input[type=range]{width:100%;accent-color:var(--a)}
+.kai-row{display:flex;gap:8px}
+.kai-row>*{flex:1}
+.kai-btn{background:var(--p);border:1px solid var(--b);border-radius:8px;padding:8px;cursor:pointer}
+.kai-btn:hover{border-color:var(--a)}
+.kai-btn.pri{background:var(--a);border-color:var(--a);color:#fff}
+.kai-btn.dng{color:#ffb4b6}
+`;
+const st = document.createElement('style');
+st.textContent = css;
+el.innerHTML = '';
+el.appendChild(st);
+
+const root = document.createElement('div');
+root.className = 'kai';
+root.innerHTML = `
+<div class="kai-h">
+  <span class="kai-dot" id="dot"></span>
+  <div class="kai-title">Lokal AI<small id="mname"></small></div>
+  <button class="kai-ib" id="bNew" title="Ny chatt">Ny</button>
+  <button class="kai-ib" id="bSet" title="Inställningar">⚙</button>
+</div>
+<div class="kai-msgs" id="msgs"></div>
+<div class="kai-c">
+  <textarea id="inp" rows="1" placeholder="Skriv en fråga... (Enter skickar, Shift+Enter ny rad)"></textarea>
+  <button class="kai-send" id="bSend">Skicka</button>
+</div>
+<div class="kai-set" id="set">
+  <div class="kai-h"><div class="kai-title">Inställningar</div><button class="kai-ib" id="bClose">Klar</button></div>
+  <div class="kai-sb">
+    <div class="kai-f"><label>Ollama-adress</label><input type="text" id="sUrl" placeholder="http://192.168.1.x:11434"></div>
+    <div class="kai-f"><label>Modell</label>
+      <div class="kai-row"><select id="sModel"></select><button class="kai-btn" id="bRef" style="flex:none">Uppdatera lista</button></div>
+    </div>
+    <div class="kai-f"><label>Förinställning</label><select id="sPre"></select></div>
+    <div class="kai-f"><label>Systemprompt</label><textarea id="sSys"></textarea></div>
+    <div class="kai-f"><label>Kreativitet (temperatur): <b id="vTemp"></b></label><input type="range" id="sTemp" min="0" max="1.5" step="0.1"></div>
+    <div class="kai-row">
+      <div class="kai-f"><label>Kontext (tokens)</label><select id="sCtx"><option>2048</option><option>4096</option><option>8192</option><option>16384</option></select></div>
+      <div class="kai-f"><label>Behåll i VRAM</label><select id="sKeep"><option value="2m">2 min</option><option value="10m">10 min</option><option value="1h">1 timme</option><option value="-1">Alltid</option></select></div>
+    </div>
+    <div class="kai-f"><label>Textstorlek: <b id="vFont"></b> px</label><input type="range" id="sFont" min="11" max="20" step="1"></div>
+    <div class="kai-row"><button class="kai-btn" id="bTest">Testa anslutning</button><button class="kai-btn" id="bExp">Kopiera chatt</button></div>
+    <div id="tres" class="kai-st"></div>
+    <button class="kai-btn dng" id="bClr">Rensa chatt</button>
+    <button class="kai-btn pri" id="bDone">Spara och stäng</button>
+  </div>
+</div>`;
+el.appendChild(root);
+const $ = id => root.querySelector('#' + id);
+
+// Hindra att Kanvas drar/zoomar rutan när man använder den
+['mousedown', 'pointerdown', 'touchstart', 'wheel', 'keydown', 'keyup'].forEach(ev =>
+  root.addEventListener(ev, e => e.stopPropagation(), { passive: true }));
+
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function inline(t) {
+  return esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
+}
+function render(text) {
+  return text.split('```').map((part, i) => {
+    if (i % 2 === 0) return inline(part);
+    const nl = part.indexOf('\n');
+    const lang = nl > -1 ? part.slice(0, nl).trim() : part.trim();
+    const code = nl > -1 ? part.slice(nl + 1) : '';
+    return '<div class="kai-code"><div class="kai-ch"><span>' + esc(lang || 'kod') + '</span><button data-copy="1">Kopiera</button></div><pre>' + esc(code) + '</pre></div>';
+  }).join('');
+}
+function copyText(t, btn) {
+  const done = () => { if (btn) { const o = btn.textContent; btn.textContent = 'Kopierad!'; setTimeout(() => btn.textContent = o, 1200); } };
+  const fb = () => { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} ta.remove(); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, fb); else fb();
+}
+
+const msgs = $('msgs');
+function applyFont() { msgs.style.fontSize = cfg.font + 'px'; $('inp').style.fontSize = cfg.font + 'px'; }
+function scroll() { msgs.scrollTop = msgs.scrollHeight; }
+function addBubble(m) {
+  const d = document.createElement('div');
+  d.className = 'kai-m ' + m.role;
+  d.innerHTML = m.role === 'user' ? inline(m.content) : render(m.content);
+  if (m.stats) { const s = document.createElement('div'); s.className = 'kai-st'; s.textContent = m.stats; d.appendChild(s); }
+  msgs.appendChild(d);
+  return d;
+}
+function drawAll() {
+  msgs.innerHTML = '';
+  if (!history.length) {
+    msgs.innerHTML = '<div class="kai-empty"><b>Hej! 👋</b>Fråga vad du vill. Körs lokalt på din dator.</div>';
+    return;
+  }
+  history.forEach(addBubble);
+  scroll();
+}
+msgs.addEventListener('click', e => {
+  const b = e.target.closest('[data-copy]');
+  if (!b) return;
+  const pre = b.closest('.kai-code').querySelector('pre');
+  copyText(pre.textContent, b);
+});
+
+function base() { return cfg.url.replace(/\/+$/, ''); }
+async function loadModels(showErr) {
+  try {
+    const r = await fetch(base() + '/api/tags');
+    const j = await r.json();
+    const names = (j.models || []).map(m => m.name);
+    $('dot').classList.add('ok');
+    const sel = $('sModel');
+    sel.innerHTML = '';
+    if (!names.includes(cfg.model)) names.unshift(cfg.model);
+    names.forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); });
+    sel.value = cfg.model;
+    return names.length;
+  } catch (e) {
+    $('dot').classList.remove('ok');
+    const sel = $('sModel');
+    if (!sel.options.length) { const o = document.createElement('option'); o.value = cfg.model; o.textContent = cfg.model; sel.appendChild(o); }
+    if (showErr) throw e;
+    return 0;
+  }
+}
+
+async function send() {
+  if (busy) { if (ctrl) ctrl.abort(); return; }
+  const inp = $('inp');
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = ''; inp.style.height = 'auto';
+  if (!history.length) msgs.innerHTML = '';
+  const um = { role: 'user', content: text };
+  history.push(um); addBubble(um);
+  const am = { role: 'assistant', content: '' };
+  const bub = addBubble({ role: 'assistant', content: '' });
+  bub.innerHTML = '<span style="color:var(--m)">Tänker...</span>';
+  scroll();
+  busy = true; ctrl = new AbortController();
+  $('bSend').textContent = 'Stopp'; $('bSend').classList.add('stop');
+  let pending = false;
+  const paint = () => { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; bub.innerHTML = render(am.content); scroll(); }); };
+  try {
+    const body = {
+      model: cfg.model, stream: true, keep_alive: cfg.keep === '-1' ? -1 : cfg.keep,
+      options: { temperature: Number(cfg.temp), num_ctx: Number(cfg.ctx) },
+      messages: [{ role: 'system', content: cfg.system }].concat(history.map(m => ({ role: m.role, content: m.content })))
+    };
+    const r = await fetch(base() + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctrl.signal });
+    if (!r.ok) throw new Error('Servern svarade ' + r.status + ': ' + (await r.text()).slice(0, 200));
+    $('dot').classList.add('ok');
+    const rd = r.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await rd.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) > -1) {
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        if (!line) continue;
+        let j; try { j = JSON.parse(line); } catch (e) { continue; }
+        if (j.error) throw new Error(j.error);
+        if (j.message && j.message.content) { am.content += j.message.content; paint(); }
+        if (j.done && j.eval_count && j.eval_duration) {
+          am.stats = j.eval_count + ' tokens · ' + (j.eval_count / (j.eval_duration / 1e9)).toFixed(1) + ' tok/s';
+        }
+      }
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') { am.content += (am.content ? '\n\n' : '') + '_(stoppad)_'; }
+    else {
+      $('dot').classList.remove('ok');
+      am.content = 'Kunde inte nå AI:n.\n' + e.message + '\n\nKolla att Ollama körs, att adressen i ⚙ stämmer och (från telefon/APK) att OLLAMA_ORIGINS=* är satt på datorn.';
+      am.err = true;
+    }
+  }
+  bub.innerHTML = render(am.content);
+  if (am.err) bub.classList.add('err');
+  if (am.stats) { const s = document.createElement('div'); s.className = 'kai-st'; s.textContent = am.stats; bub.appendChild(s); }
+  if (!am.err) history.push(am);
+  save(); scroll();
+  busy = false; ctrl = null;
+  $('bSend').textContent = 'Skicka'; $('bSend').classList.remove('stop');
+}
+
+// Inställningar
+function fillSettings() {
+  $('sUrl').value = cfg.url; $('sSys').value = cfg.system;
+  $('sTemp').value = cfg.temp; $('vTemp').textContent = cfg.temp;
+  $('sCtx').value = String(cfg.ctx); $('sKeep').value = cfg.keep;
+  $('sFont').value = cfg.font; $('vFont').textContent = cfg.font;
+  $('mname').textContent = cfg.model;
+}
+const pre = $('sPre');
+pre.innerHTML = '<option value="">Välj förinställning...</option>' + PRESETS.map((p, i) => '<option value="' + i + '">' + esc(p.name) + '</option>').join('');
+pre.onchange = () => { if (pre.value !== '') { cfg.system = PRESETS[pre.value].text; $('sSys').value = cfg.system; save(); } };
+$('sUrl').onchange = () => { cfg.url = $('sUrl').value.trim() || DEF.url; save(); loadModels(); };
+$('sModel').onchange = () => { cfg.model = $('sModel').value; $('mname').textContent = cfg.model; save(); };
+$('sSys').oninput = () => { cfg.system = $('sSys').value; save(); };
+$('sTemp').oninput = () => { cfg.temp = Number($('sTemp').value); $('vTemp').textContent = cfg.temp; save(); };
+$('sCtx').onchange = () => { cfg.ctx = Number($('sCtx').value); save(); };
+$('sKeep').onchange = () => { cfg.keep = $('sKeep').value; save(); };
+$('sFont').oninput = () => { cfg.font = Number($('sFont').value); $('vFont').textContent = cfg.font; applyFont(); save(); };
+$('bRef').onclick = () => { $('tres').textContent = 'Hämtar...'; loadModels(true).then(n => $('tres').textContent = n + ' modeller hittades.').catch(e => $('tres').textContent = 'Fel: ' + e.message); };
+$('bTest').onclick = $('bRef').onclick;
+$('bExp').onclick = e => copyText(history.map(m => (m.role === 'user' ? 'Du: ' : 'AI: ') + m.content).join('\n\n'), e.target);
+$('bClr').onclick = () => { history = []; save(); drawAll(); $('set').classList.remove('open'); };
+$('bNew').onclick = $('bClr').onclick;
+$('bSet').onclick = () => { fillSettings(); $('set').classList.add('open'); };
+$('bClose').onclick = $('bDone').onclick = () => $('set').classList.remove('open');
+
+$('bSend').onclick = send;
+$('inp').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+$('inp').addEventListener('input', e => { const t = e.target; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 140) + 'px'; });
+
+fillSettings(); applyFont(); drawAll(); loadModels();
