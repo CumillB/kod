@@ -1,0 +1,748 @@
+// ===== J.A.R.V.I.S – runs in the canvas (container: el) =====
+// 3D reactor + voice (en-US) + chat with Claude. Enter your API key in the app (🔑); it is only stored in your browser.
+
+const THREE = window.THREE || await import('three');
+el._disposers = el._disposers || [];
+const off = fn => el._disposers.push(fn);
+
+// ---------- UI ----------
+el.innerHTML = '';
+el.style.position = 'relative';
+el.style.overflow = 'hidden';
+el.style.background = 'radial-gradient(circle at 50% 35%, #06202b 0%, #02060c 70%)';
+el.style.fontFamily = 'ui-monospace, Menlo, Consolas, monospace';
+el.style.color = '#9eeaff';
+el.style.minHeight = el.style.minHeight || '480px';
+
+const ui = document.createElement('div');
+ui.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none;z-index:2;';
+ui.innerHTML = `
+  <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">
+    <div style="letter-spacing:.35em;font-size:15px;color:#00e5ff;text-shadow:0 0 8px #00e5ff;">J.A.R.V.I.S</div>
+    <div id="jv-status" style="font-size:12px;opacity:.8;letter-spacing:.2em;">IDLE</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:8px;padding:14px;width:100%;max-width:820px;margin:0 auto;box-sizing:border-box;">
+    <div id="jv-log" style="pointer-events:auto;max-height:30vh;overflow-y:auto;font-size:13px;line-height:1.45;
+         background:rgba(0,20,30,.55);border:1px solid rgba(0,229,255,.25);border-radius:10px;padding:8px 10px;"></div>
+    <div style="display:flex;gap:6px;pointer-events:auto;">
+      <button id="jv-mic" title="Speak" style="width:44px;border-radius:10px;border:1px solid #00e5ff;background:rgba(0,229,255,.12);color:#00e5ff;font-size:18px;">🎤</button>
+      <input id="jv-in" placeholder="Type to Jarvis…" autocomplete="off"
+         style="flex:1;min-width:0;padding:10px;border-radius:10px;border:1px solid rgba(0,229,255,.4);background:rgba(0,10,16,.8);color:#d8f8ff;font:inherit;font-size:16px;outline:none;">
+      <button id="jv-send" style="padding:0 14px;border-radius:10px;border:1px solid #00e5ff;background:rgba(0,229,255,.12);color:#00e5ff;">Send</button>
+      <button id="jv-key" title="API key" style="width:44px;border-radius:10px;border:1px solid rgba(0,229,255,.4);background:transparent;color:#00e5ff;font-size:16px;">🔑</button>
+    </div>
+  </div>`;
+el.appendChild(ui);
+const $ = id => ui.querySelector('#' + id);
+const logEl = $('jv-log'), statusEl = $('jv-status'), inEl = $('jv-in');
+
+function addLine(who, text) {
+  const d = document.createElement('div');
+  d.style.margin = '3px 0';
+  const b = document.createElement('b');
+  b.textContent = who === 'you' ? 'You: ' : 'Jarvis: ';
+  b.style.color = who === 'you' ? '#ffd180' : '#00e5ff';
+  d.appendChild(b);
+  d.appendChild(document.createTextNode(text));
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ---------- State ----------
+let mode = 'idle'; // idle | listening | thinking | speaking
+const LABEL = { idle: 'IDLE', listening: 'LISTENING', thinking: 'THINKING', speaking: 'SPEAKING' };
+const COLOR = { idle: 0x00bcd4, listening: 0x66ff99, thinking: 0xffb300, speaking: 0x00e5ff };
+const SPEED = { idle: 1, listening: 2, thinking: 4, speaking: 2.5 };
+function setMode(m) { if (m !== mode) pulseWave(); mode = m; statusEl.textContent = LABEL[m]; }
+
+// ---------- 3D reactor ----------
+const W = () => el.clientWidth || 960;
+const H = () => el.clientHeight || 600;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, W() / H(), 0.1, 200);
+camera.position.z = 20;
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+renderer.setSize(W(), H(), false);
+renderer.setClearColor(0x000000, 0);
+renderer.sortObjects = false; // additive blending is order-independent
+const cv = renderer.domElement;
+cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;touch-action:none;z-index:1;';
+el.appendChild(cv);
+
+// Point size in pixels, shared by all GPU particles and follows the resolution
+const pxU = { value: 1 };
+const syncPx = () => { pxU.value = renderer.getPixelRatio() * H() / 2; };
+syncPx();
+
+// All colors that follow the mode are collected here and lerped smoothly
+const tint = new THREE.Color(COLOR.idle);
+const goal = new THREE.Color(COLOR.idle);
+const tints = [];
+const ADD = { blending: THREE.AdditiveBlending, depthWrite: false, transparent: true };
+const mk = (op = 1, extra = {}) => { const m = new THREE.MeshBasicMaterial({ color: COLOR.idle, opacity: op, ...ADD, ...extra }); tints.push(m.color); return m; };
+// Soft objects go in layer 1 (rendered without MSAA), sharp ones in layer 0
+const soft = o => { o.layers.set(1); return o; };
+
+// Soft glow texture (drawn on a canvas, no external files)
+function glowTex() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(255,255,255,1)');
+  gr.addColorStop(0.25, 'rgba(255,255,255,0.45)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+}
+const gtex = glowTex();
+
+// Random direction on the unit sphere
+const rd = () => {
+  const th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1);
+  return [Math.sin(ph) * Math.cos(th), Math.sin(ph) * Math.sin(th), Math.cos(ph)];
+};
+
+// ----- Bloom: sharp layer (MSAA) + soft layer (no MSAA) -> threshold -> 3 blur levels -> composite -----
+let bloomOK = false, rtScene = null, rtSoft = null, rtA = [], rtB = [];
+const LV = 3;
+const quadScene = new THREE.Scene();
+const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial());
+quad.frustumCulled = false;
+quadScene.add(quad);
+const QV = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+const QM = { depthTest: false, depthWrite: false };
+
+const brightMat = new THREE.ShaderMaterial({
+  ...QM, uniforms: { tMap: { value: null }, tSoft: { value: null } }, vertexShader: QV,
+  fragmentShader: `uniform sampler2D tMap; uniform sampler2D tSoft; varying vec2 vUv;
+    void main(){ vec3 c = min(max(texture2D(tMap, vUv).rgb + texture2D(tSoft, vUv).rgb, vec3(0.0)), vec3(32.0)); float l = max(c.r, max(c.g, c.b));
+      gl_FragColor = vec4(c * smoothstep(0.1, 0.6, l) * 1.6, 1.0); }`
+});
+const blurMat = new THREE.ShaderMaterial({
+  ...QM, uniforms: { tMap: { value: null }, uDir: { value: new THREE.Vector2() } }, vertexShader: QV,
+  fragmentShader: `uniform sampler2D tMap; uniform vec2 uDir; varying vec2 vUv;
+    void main(){
+      vec3 s = texture2D(tMap, vUv).rgb * 0.2270270270;
+      s += texture2D(tMap, vUv + uDir * 1.3846153846).rgb * 0.3162162162;
+      s += texture2D(tMap, vUv - uDir * 1.3846153846).rgb * 0.3162162162;
+      s += texture2D(tMap, vUv + uDir * 3.2307692308).rgb * 0.0702702703;
+      s += texture2D(tMap, vUv - uDir * 3.2307692308).rgb * 0.0702702703;
+      gl_FragColor = vec4(s, 1.0); }`
+});
+const compMat = new THREE.ShaderMaterial({
+  ...QM, uniforms: { tScene: { value: null }, tSoft: { value: null }, tB0: { value: null }, tB1: { value: null }, tB2: { value: null }, uBloom: { value: 1 } },
+  vertexShader: QV,
+  fragmentShader: `uniform sampler2D tScene; uniform sampler2D tSoft; uniform sampler2D tB0; uniform sampler2D tB1; uniform sampler2D tB2; uniform float uBloom; varying vec2 vUv;
+    vec3 smp(vec2 uv){ return min(max(texture2D(tScene, uv).rgb + texture2D(tSoft, uv).rgb, vec3(0.0)), vec3(32.0)); }
+    void main(){
+      vec2 d = vUv - 0.5; float r2 = dot(d, d);
+      vec2 o = d * 0.004 * (0.4 + r2 * 3.0);
+      vec3 s = vec3(smp(vUv + o).r, smp(vUv).g, smp(vUv - o).b);
+      vec3 b = texture2D(tB0, vUv).rgb * 0.5 + texture2D(tB1, vUv).rgb * 0.8 + texture2D(tB2, vUv).rgb * 1.0;
+      vec3 c = s + b * uBloom;
+      c = vec3(1.0) - exp(-c * 1.2);
+      c = pow(c, vec3(1.0 / 2.2));
+      gl_FragColor = vec4(c, clamp(max(c.r, max(c.g, c.b)), 0.0, 1.0)); }`
+});
+
+function disposeTargets() {
+  [rtScene, rtSoft, ...rtA, ...rtB].forEach(r => r && r.dispose());
+  rtScene = null; rtSoft = null; rtA = []; rtB = [];
+}
+function rtOK(rt) {
+  try {
+    renderer.setRenderTarget(rt);
+    renderer.clear();
+    const gl = renderer.getContext();
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    renderer.setRenderTarget(null);
+    return ok;
+  } catch (e) { renderer.setRenderTarget(null); return false; }
+}
+function buildTargets(type, samples) {
+  disposeTargets();
+  // No depth buffer: everything is additive without depth writes
+  const o = { type, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
+  rtScene = new THREE.WebGLRenderTarget(2, 2, { ...o, samples });
+  rtSoft = new THREE.WebGLRenderTarget(2, 2, o);
+  for (let i = 0; i < LV; i++) { rtA.push(new THREE.WebGLRenderTarget(2, 2, o)); rtB.push(new THREE.WebGLRenderTarget(2, 2, o)); }
+  sizeTargets();
+  return rtOK(rtScene) && rtOK(rtSoft) && rtOK(rtB[0]) && rtOK(rtB[LV - 1]);
+}
+function sizeTargets() {
+  if (!rtScene) return;
+  const s = renderer.getDrawingBufferSize(new THREE.Vector2());
+  rtScene.setSize(s.x, s.y);
+  rtSoft.setSize(s.x, s.y);
+  for (let i = 0; i < LV; i++) {
+    const w = Math.max(2, s.x >> (i + 1)), h = Math.max(2, s.y >> (i + 1));
+    rtA[i].setSize(w, h); rtB[i].setSize(w, h);
+  }
+}
+(function initBloom() {
+  const ext = renderer.extensions;
+  const half = ext.has('EXT_color_buffer_float') || ext.has('EXT_color_buffer_half_float');
+  const gl2 = renderer.capabilities.isWebGL2 !== false;
+  const tries = [];
+  if (half && gl2) tries.push([THREE.HalfFloatType, 4]);
+  if (half) tries.push([THREE.HalfFloatType, 0]);
+  tries.push([THREE.UnsignedByteType, gl2 ? 4 : 0], [THREE.UnsignedByteType, 0]);
+  for (const [ty, sm] of tries) {
+    try { if (buildTargets(ty, sm)) { bloomOK = true; return; } } catch (e) {}
+  }
+  disposeTargets();
+})();
+
+function pass(mat, target) { quad.material = mat; renderer.setRenderTarget(target); renderer.render(quadScene, quadCam); }
+function blur(src, tmp, dst) {
+  blurMat.uniforms.tMap.value = src.texture; blurMat.uniforms.uDir.value.set(1 / tmp.width, 0); pass(blurMat, tmp);
+  blurMat.uniforms.tMap.value = tmp.texture; blurMat.uniforms.uDir.value.set(0, 1 / dst.height); pass(blurMat, dst);
+}
+function renderFrame() {
+  if (bloomOK) {
+    try {
+      camera.layers.set(0);
+      renderer.setRenderTarget(rtScene);
+      renderer.render(scene, camera);
+      camera.layers.set(1);
+      renderer.setRenderTarget(rtSoft);
+      renderer.render(scene, camera);
+      brightMat.uniforms.tMap.value = rtScene.texture;
+      brightMat.uniforms.tSoft.value = rtSoft.texture;
+      pass(brightMat, rtB[0]);
+      blur(rtB[0], rtA[0], rtB[0]);
+      for (let i = 1; i < LV; i++) blur(rtB[i - 1], rtA[i], rtB[i]);
+      compMat.uniforms.tScene.value = rtScene.texture;
+      compMat.uniforms.tSoft.value = rtSoft.texture;
+      compMat.uniforms.tB0.value = rtB[0].texture;
+      compMat.uniforms.tB1.value = rtB[1].texture;
+      compMat.uniforms.tB2.value = rtB[2].texture;
+      pass(compMat, null);
+      return;
+    } catch (e) { bloomOK = false; }
+  }
+  camera.layers.enableAll();
+  renderer.setRenderTarget(null);
+  renderer.render(scene, camera);
+}
+
+const group = new THREE.Group();
+group.position.y = 0.9;
+scene.add(group);
+
+// Floor grid that glides toward the camera (sharp lines, so it stays in the MSAA layer)
+const gp = [], GS = 40, STEP = 1.5;
+for (let i = -GS; i <= GS; i += STEP) gp.push(i, 0, -GS, i, 0, GS, -GS, 0, i, GS, 0, i);
+const floorGeo = new THREE.BufferGeometry();
+floorGeo.setAttribute('position', new THREE.Float32BufferAttribute(gp, 3));
+const floorU = { uColor: { value: new THREE.Color(COLOR.idle) } };
+tints.push(floorU.uColor.value);
+const floor = new THREE.LineSegments(floorGeo, new THREE.ShaderMaterial({
+  uniforms: floorU, ...ADD,
+  vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform vec3 uColor; varying vec3 vP;
+    void main(){ float d = length(vP.xz); float a = (1.0 - smoothstep(4.0, 26.0, d)) * 0.5;
+      gl_FragColor = vec4(uColor * 1.4, a); }`
+}));
+floor.position.y = -3.8;
+floor.matrixAutoUpdate = false;
+scene.add(floor);
+
+// Background glow (two layers, soft layer)
+const glowMat = new THREE.SpriteMaterial({ map: gtex, color: COLOR.idle, opacity: 0.55, ...ADD });
+tints.push(glowMat.color);
+const glow = soft(new THREE.Sprite(glowMat));
+glow.scale.setScalar(9);
+group.add(glow);
+const glow2Mat = new THREE.SpriteMaterial({ map: gtex, color: COLOR.idle, opacity: 0.35, ...ADD });
+tints.push(glow2Mat.color);
+const glow2 = soft(new THREE.Sprite(glow2Mat));
+glow2.scale.setScalar(3.2);
+group.add(glow2);
+
+// Core: plasma shader with fresnel, bulges when Jarvis speaks
+const coreU = { uColor: { value: new THREE.Color(COLOR.idle) }, uTime: { value: 0 }, uAmp: { value: 0 } };
+tints.push(coreU.uColor.value);
+const coreMat = new THREE.ShaderMaterial({
+  uniforms: coreU, ...ADD,
+  vertexShader: `uniform float uTime; uniform float uAmp; varying vec3 vN; varying vec3 vV; varying vec3 vP;
+    float h(vec3 p){ return sin(p.x * 5.0 + uTime * 1.3) * sin(p.y * 6.0 - uTime) * sin(p.z * 5.0 + uTime * 0.7); }
+    void main(){
+      vP = position;
+      vec3 pos = position + normal * h(position * 1.5) * (0.04 + uAmp * 0.09);
+      vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+      vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz);
+      gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `uniform vec3 uColor; uniform float uTime; varying vec3 vN; varying vec3 vV; varying vec3 vP;
+    float h(vec3 p){ return sin(p.x * 5.0 + uTime * 1.3) * sin(p.y * 6.0 - uTime) * sin(p.z * 5.0 + uTime * 0.7); }
+    void main(){
+      float f = pow(clamp(1.0 - abs(dot(normalize(vN), normalize(vV))), 0.0, 1.0), 2.2);
+      float pl = clamp(0.5 + 0.5 * (h(vP) + 0.5 * h(vP * 2.1 + 3.0)), 0.0, 1.25);
+      float band = 0.5 + 0.5 * sin(vN.y * 14.0 + uTime * 3.0);
+      vec3 col = uColor * (0.3 + f * 1.6 + pl * 0.7 + band * 0.15);
+      col += vec3(1.0) * pow(pl, 4.0) * 0.35;
+      gl_FragColor = vec4(col, 0.6 + f * 0.4); }`
+});
+const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.6, 4), coreMat);
+group.add(core);
+
+const shell = new THREE.Mesh(new THREE.IcosahedronGeometry(0.9, 1), mk(0.45, { wireframe: true }));
+group.add(shell);
+
+const hot = new THREE.Mesh(new THREE.SphereGeometry(0.22, 32, 32), mk(0.95));
+hot.material.color.setRGB(3, 3, 3); tints.pop(); // the center stays white and hot
+group.add(hot);
+
+// Gyroscope rings: the pivot tilts them in 3D, the ring rotates in its own plane
+const rings = [];
+[
+  { r: 1.35, tube: 0.025, arc: Math.PI * 2, tx: 0.0, ty: 0.0, spd: 0.5, op: 0.95 },
+  { r: 1.8, tube: 0.03, arc: Math.PI * 1.5, tx: 0.9, ty: 0.2, spd: -0.7, op: 0.85 },
+  { r: 2.3, tube: 0.02, arc: Math.PI * 1.2, tx: -0.7, ty: 0.6, spd: 0.4, op: 0.8 },
+  { r: 2.8, tube: 0.035, arc: Math.PI * 1.7, tx: 0.35, ty: -0.9, spd: -0.3, op: 0.7 },
+  { r: 3.3, tube: 0.015, arc: Math.PI * 2, tx: 1.2, ty: 0.0, spd: 0.2, op: 0.5 }
+].forEach(o => {
+  const pivot = new THREE.Group();
+  pivot.rotation.set(o.tx, o.ty, 0);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(o.r, o.tube, 12, 220, o.arc), mk(o.op));
+  ring.userData.spd = o.spd;
+  pivot.add(ring); group.add(pivot); rings.push(ring);
+});
+
+// Dashed outer rings, rotating in opposite directions
+const dashed = [];
+[4.3, 4.65].forEach((r, i) => {
+  const pts = [];
+  for (let k = 0; k <= 256; k++) { const a = k / 256 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * r, Math.sin(a) * r, 0)); }
+  const g = new THREE.BufferGeometry().setFromPoints(pts);
+  const m = new THREE.LineDashedMaterial({ color: COLOR.idle, dashSize: 0.2 - i * 0.07, gapSize: 0.12 + i * 0.1, opacity: 0.55, ...ADD });
+  tints.push(m.color);
+  const l = new THREE.Line(g, m);
+  l.computeLineDistances();
+  l.userData.spd = i ? 0.15 : -0.1;
+  group.add(l); dashed.push(l);
+});
+
+// Radar sweep in the reactor plane (soft layer)
+const sweepU = { uColor: { value: new THREE.Color(COLOR.idle) }, uAng: { value: 0 } };
+tints.push(sweepU.uColor.value);
+const sweep = soft(new THREE.Mesh(new THREE.CircleGeometry(3.6, 96), new THREE.ShaderMaterial({
+  uniforms: sweepU, ...ADD, side: THREE.DoubleSide,
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform vec3 uColor; uniform float uAng; varying vec2 vUv;
+    void main(){
+      vec2 p = vUv - 0.5; float len = length(p);
+      float a = atan(p.y, p.x);
+      float d = mod(uAng - a, 6.2831853);
+      float al = exp(-d * 1.6) * 0.4 * smoothstep(0.12, 0.2, len) * (1.0 - smoothstep(0.42, 0.5, len));
+      gl_FragColor = vec4(uColor * 1.5, al); }`
+})));
+sweep.position.z = -0.05;
+group.add(sweep);
+
+// Tick ring: instanced marks around the edge (static matrices, set once)
+const TICKS = 120;
+const tickMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.02, 0.14, 0.02), mk(0.8), TICKS);
+const dummy = new THREE.Object3D();
+for (let i = 0; i < TICKS; i++) {
+  const a = i / TICKS * Math.PI * 2;
+  dummy.position.set(Math.cos(a) * 3.7, Math.sin(a) * 3.7, 0);
+  dummy.rotation.set(0, 0, a - Math.PI / 2);
+  dummy.scale.set(1, i % 10 === 0 ? 2.2 : 1, 1);
+  dummy.updateMatrix();
+  tickMesh.setMatrixAt(i, dummy.matrix);
+}
+tickMesh.instanceMatrix.needsUpdate = true;
+group.add(tickMesh);
+
+// Audio bars: height is computed on the GPU, matrices are set only once
+const BARS = 120;
+const barGeo = new THREE.BoxGeometry(0.03, 1, 0.03);
+barGeo.translate(0, 0.5, 0);
+const bi = new Float32Array(BARS);
+for (let i = 0; i < BARS; i++) bi[i] = i;
+barGeo.setAttribute('aI', new THREE.InstancedBufferAttribute(bi, 1));
+const barU = { uColor: { value: new THREE.Color(COLOR.idle) }, uT: { value: 0 }, uLvl: { value: 0.05 }, uThink: { value: 0 }, uOp: { value: 0.9 } };
+tints.push(barU.uColor.value);
+const barMesh = new THREE.InstancedMesh(barGeo, new THREE.ShaderMaterial({
+  uniforms: barU, ...ADD,
+  vertexShader: `attribute float aI; uniform float uT; uniform float uLvl; uniform float uThink;
+    void main(){
+      float n = 0.5 + 0.5 * sin(aI * 0.9 + uT * 7.0) * sin(aI * 0.37 - uT * 3.1);
+      float h = 0.04 + uLvl * n;
+      float d = mod(aI - uT * 20.0, ${BARS}.0);
+      h += uThink * 0.5 * exp(-d * 0.25);
+      h = min(h, 0.6);
+      vec4 p = instanceMatrix * vec4(position.x, position.y * h, position.z, 1.0);
+      gl_Position = projectionMatrix * modelViewMatrix * p; }`,
+  fragmentShader: `uniform vec3 uColor; uniform float uOp; void main(){ gl_FragColor = vec4(uColor, uOp); }`
+}), BARS);
+for (let i = 0; i < BARS; i++) {
+  const a = i / BARS * Math.PI * 2;
+  dummy.position.set(Math.cos(a) * 3.95, Math.sin(a) * 3.95, 0);
+  dummy.rotation.set(0, 0, a - Math.PI / 2);
+  dummy.scale.set(1, 1, 1);
+  dummy.updateMatrix();
+  barMesh.setMatrixAt(i, dummy.matrix);
+}
+barMesh.instanceMatrix.needsUpdate = true;
+barMesh.frustumCulled = false;
+group.add(barMesh);
+
+// Radial spokes between the core and the innermost ring
+const spokePos = [];
+for (let i = 0; i < 24; i++) {
+  const a = i / 24 * Math.PI * 2;
+  spokePos.push(Math.cos(a) * 0.95, Math.sin(a) * 0.95, 0, Math.cos(a) * 1.3, Math.sin(a) * 1.3, 0);
+}
+const spokeGeo = new THREE.BufferGeometry();
+spokeGeo.setAttribute('position', new THREE.Float32BufferAttribute(spokePos, 3));
+const spokeMat = new THREE.LineBasicMaterial({ color: COLOR.idle, opacity: 0.4, ...ADD });
+tints.push(spokeMat.color);
+const spokes = new THREE.LineSegments(spokeGeo, spokeMat);
+group.add(spokes);
+
+// Shockwaves: flat rings that grow outward and fade
+const waves = [];
+for (let i = 0; i < 4; i++) {
+  const w = new THREE.Mesh(new THREE.RingGeometry(0.97, 1, 160), mk(0, { side: THREE.DoubleSide }));
+  w.userData.age = 1;
+  group.add(w); waves.push(w);
+}
+function pulseWave() {
+  const w = waves.find(w => w.userData.age >= 1);
+  if (w) w.userData.age = 0;
+}
+
+// Lightning arcs from the core out toward the rings
+const ARCS = 8, ARC_PTS = 28;
+const arcMat = new THREE.LineBasicMaterial({ color: COLOR.idle, opacity: 0.1, ...ADD });
+tints.push(arcMat.color);
+const arcs = [];
+for (let i = 0; i < ARCS; i++) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARC_PTS * 3), 3));
+  const line = new THREE.Line(g, arcMat);
+  line.frustumCulled = false;
+  line.userData.next = 0;
+  group.add(line); arcs.push(line);
+}
+function arcRegen(line) {
+  const a = rd(), b = rd(), r1 = 0.7, r2 = 1.4 + Math.random() * 2;
+  const p = line.geometry.attributes.position;
+  for (let j = 0; j < ARC_PTS; j++) {
+    const s = j / (ARC_PTS - 1), k = Math.sin(Math.PI * s) * 0.3;
+    for (let c = 0; c < 3; c++) {
+      const from = a[c] * r1, to = b[c] * r2;
+      p.array[j * 3 + c] = from + (to - from) * s + (Math.random() - 0.5) * k;
+    }
+  }
+  p.needsUpdate = true;
+}
+arcs.forEach(arcRegen);
+
+// Shared point shader for GPU particles (energy flow and satellite trails)
+const PF = `uniform vec3 uColor; uniform sampler2D uMap; uniform float uOp; varying float vA;
+  void main(){ float a = texture2D(uMap, gl_PointCoord).a * uOp * vA; gl_FragColor = vec4(uColor, a); }`;
+
+// Energy flow: particles drawn in toward the core, entirely on the GPU
+const FLOW = 1400, fdir = new Float32Array(FLOW * 3), fs = new Float32Array(FLOW * 2);
+for (let i = 0; i < FLOW; i++) {
+  const d = rd();
+  fdir[i * 3] = d[0]; fdir[i * 3 + 1] = d[1]; fdir[i * 3 + 2] = d[2];
+  fs[i * 2] = Math.random();            // phase offset
+  fs[i * 2 + 1] = 5 + Math.random() * 3; // start radius
+}
+const flowGeo = new THREE.BufferGeometry();
+flowGeo.setAttribute('position', new THREE.BufferAttribute(fdir, 3));
+flowGeo.setAttribute('aS', new THREE.BufferAttribute(fs, 2));
+const flowU = { uColor: { value: new THREE.Color(COLOR.idle) }, uMap: { value: gtex }, uPhase: { value: 0 }, uSize: { value: 0.14 }, uOp: { value: 0.85 }, uPx: pxU };
+tints.push(flowU.uColor.value);
+const flow = soft(new THREE.Points(flowGeo, new THREE.ShaderMaterial({
+  uniforms: flowU, ...ADD,
+  vertexShader: `attribute vec2 aS; uniform float uPhase; uniform float uSize; uniform float uPx; varying float vA;
+    void main(){
+      float p = fract(aS.x + uPhase);
+      float u0 = 0.6 + 0.25 * aS.y;
+      float u = u0 * pow(0.85 / u0, p);
+      float r = (u - 0.6) / 0.25;
+      vA = smoothstep(0.0, 0.08, p) * (1.0 - smoothstep(0.9, 1.0, p));
+      vec4 mv = modelViewMatrix * vec4(position * r, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = uSize * uPx / -mv.z; }`,
+  fragmentShader: PF
+})));
+flow.frustumCulled = false;
+group.add(flow);
+
+// Satellites with light trails in tilted orbits (trail computed on the GPU)
+const TRAIL = 40, TAU = Math.PI * 2;
+const sats = [];
+[
+  { r: 1.55, tx: 0.4, ty: 0.3, spd: 1.6 },
+  { r: 2.05, tx: -0.8, ty: 0.5, spd: -1.2 },
+  { r: 2.55, tx: 1.1, ty: -0.4, spd: 0.9 },
+  { r: 3.05, tx: -0.3, ty: -1.0, spd: -0.8 },
+  { r: 1.9, tx: 1.4, ty: 0.9, spd: 1.1 }
+].forEach((o, i) => {
+  const pivot = new THREE.Group();
+  pivot.rotation.set(o.tx, o.ty, 0);
+  const g = new THREE.BufferGeometry();
+  const ak = new Float32Array(TRAIL);
+  for (let k = 0; k < TRAIL; k++) ak[k] = k;
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL * 3), 3));
+  g.setAttribute('aK', new THREE.BufferAttribute(ak, 1));
+  const u = { uColor: { value: new THREE.Color(COLOR.idle) }, uMap: { value: gtex }, uA: { value: i * 1.3 }, uR: { value: o.r }, uDir: { value: Math.sign(o.spd) }, uSize: { value: 0.2 }, uOp: { value: 1 }, uPx: pxU };
+  tints.push(u.uColor.value);
+  const pts = soft(new THREE.Points(g, new THREE.ShaderMaterial({
+    uniforms: u, ...ADD,
+    vertexShader: `attribute float aK; uniform float uA; uniform float uR; uniform float uDir; uniform float uSize; uniform float uPx; varying float vA;
+      void main(){
+        float aa = uA - uDir * aK * 0.04;
+        vA = pow(1.0 - aK / ${TRAIL}.0, 2.0);
+        vec4 mv = modelViewMatrix * vec4(cos(aa) * uR, sin(aa) * uR, 0.0, 1.0);
+        gl_Position = projectionMatrix * mv;
+        gl_PointSize = uSize * uPx / -mv.z; }`,
+    fragmentShader: PF
+  })));
+  pts.frustumCulled = false;
+  pivot.add(pts); group.add(pivot);
+  sats.push({ u, spd: o.spd, a: i * 1.3 });
+});
+
+// Star dust slowly drifting around the reactor (soft layer)
+const DUST = 1600, dp = new Float32Array(DUST * 3);
+for (let i = 0; i < DUST; i++) {
+  const d = rd(), r = 5 + Math.random() * 12;
+  dp[i * 3] = d[0] * r; dp[i * 3 + 1] = d[1] * r; dp[i * 3 + 2] = d[2] * r;
+}
+const dg = new THREE.BufferGeometry();
+dg.setAttribute('position', new THREE.BufferAttribute(dp, 3));
+const dm = new THREE.PointsMaterial({ map: gtex, color: COLOR.idle, size: 0.12, opacity: 0.6, sizeAttenuation: true, ...ADD });
+tints.push(dm.color);
+const dust = soft(new THREE.Points(dg, dm));
+dust.frustumCulled = false;
+group.add(dust);
+
+// Drag to rotate (mouse), with inertia. The mouse position also drives the camera (parallax).
+let rx = 0, ry = 0, vx = 0, vy = 0, drag = false, lx = 0, ly = 0, mx = 0, my = 0;
+let rect = el.getBoundingClientRect(), rectT = 0; // cached so mouse moves don't force layout
+const down = e => { drag = true; lx = e.clientX; ly = e.clientY; };
+const move = e => {
+  if (e.timeStamp - rectT > 300) { rect = el.getBoundingClientRect(); rectT = e.timeStamp; }
+  mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  my = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+  if (!drag) return;
+  vy = (e.clientX - lx) * 0.01; vx = (e.clientY - ly) * 0.01;
+  ry += vy; rx += vx; lx = e.clientX; ly = e.clientY;
+};
+const up = () => { drag = false; };
+cv.addEventListener('pointerdown', down);
+window.addEventListener('pointermove', move);
+window.addEventListener('pointerup', up);
+off(() => { cv.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); });
+
+const ro = new ResizeObserver(() => {
+  renderer.setSize(W(), H(), false); syncPx(); sizeTargets();
+  camera.aspect = W() / H(); camera.updateProjectionMatrix();
+  rect = el.getBoundingClientRect(); rectT = 0;
+});
+ro.observe(el);
+off(() => ro.disconnect());
+
+let raf = 0, last = performance.now(), t = 0, T = 0, amp = 0, arcLvl = 0, waveTimer = 0, fz = 0, intro = 0;
+let dt = 0.016, spS = 1, thk = 0, flowPh = 0;
+const E = r => 1 - Math.exp(-dt * r); // time-based smoothing, equally smooth at 60 and 144 Hz
+(function loop(now) {
+  raf = requestAnimationFrame(loop);
+  dt = Math.min((now - last) / 1000, 0.05); last = now;
+  spS += (SPEED[mode] - spS) * E(6); // speed glides between modes
+  const sp = spS;
+  t += dt * sp; T += dt;
+  coreU.uTime.value = T;
+
+  // Startup: the reactor zooms in and lights up
+  intro = Math.min(1, intro + dt / 3);
+  const ie = 1 - Math.pow(1 - intro, 3);
+  group.scale.setScalar(0.6 + 0.4 * ie);
+
+  // Smooth color transition
+  goal.setHex(COLOR[mode]);
+  tint.lerp(goal, E(5));
+  for (let i = 0; i < tints.length; i++) tints[i].copy(tint);
+
+  // Pulse: irregular while Jarvis speaks, calm otherwise
+  const target = mode === 'speaking' ? 0.5 + 0.5 * Math.abs(Math.sin(t * 5) * Math.sin(t * 2.3 + 1)) : 0;
+  amp += (target - amp) * E(10);
+  coreU.uAmp.value = amp;
+  const breathe = 1 + 0.03 * Math.sin(T * 2) + amp * 0.25;
+  core.scale.setScalar(breathe);
+  shell.scale.setScalar(1 + amp * 0.18);
+  hot.scale.setScalar(1 + 0.1 * Math.sin(T * 3) + amp * 0.5);
+  glow.scale.setScalar(9 + amp * 2.5 + Math.sin(T * 1.5) * 0.3);
+  glowMat.opacity = (0.45 + amp * 0.35) * ie;
+  glow2.scale.setScalar(3.2 + amp * 1.2);
+  glow2Mat.opacity = (0.3 + amp * 0.4) * ie;
+  compMat.uniforms.uBloom.value = 0.9 + amp * 0.8 + (mode === 'thinking' ? 0.3 : 0) + (1 - ie) * 1.2;
+
+  // Camera: intro dolly, pulse and mouse parallax
+  camera.position.z += (11 + (1 - ie) * 9 - amp * 0.6 - camera.position.z) * E(6);
+  camera.position.x += (mx * 0.8 - camera.position.x) * E(2.5);
+  camera.position.y += (-my * 0.5 - camera.position.y) * E(2.5);
+  camera.lookAt(0, 0, 0);
+
+  // Floor
+  fz += dt * 0.5 * sp;
+  floor.position.z = fz % STEP;
+  floor.updateMatrix();
+
+  // Radar sweep and dashed rings
+  sweepU.uAng.value = (sweepU.uAng.value + dt * 1.4 * sp) % TAU;
+  for (let i = 0; i < dashed.length; i++) dashed[i].rotation.z += dashed[i].userData.spd * dt * sp;
+
+  // Shockwaves: rhythmic while Jarvis speaks
+  waveTimer += dt;
+  if (mode === 'speaking' && waveTimer > 0.55) { waveTimer = 0; pulseWave(); }
+  for (let i = 0; i < waves.length; i++) {
+    const w = waves[i], u = w.userData;
+    if (u.age >= 1) { if (w.material.opacity !== 0) w.material.opacity = 0; continue; }
+    u.age += dt * 0.55;
+    w.scale.setScalar(1 + u.age * 3.6);
+    w.material.opacity = Math.pow(1 - Math.min(u.age, 1), 2) * 0.6;
+  }
+
+  // Audio bars (heights computed in the shader)
+  const lvl = mode === 'listening' ? 0.35 : mode === 'thinking' ? 0.15 : mode === 'speaking' ? 0.2 + amp * 1.0 : 0.05;
+  thk += ((mode === 'thinking' ? 1 : 0) - thk) * E(8);
+  barU.uT.value = T; barU.uLvl.value = lvl; barU.uThink.value = thk;
+  barMesh.rotation.z += dt * 0.08 * sp;
+
+  // Lightning arcs: strong while thinking, faint otherwise
+  const arcGoal = mode === 'thinking' ? 0.85 : mode === 'speaking' ? 0.3 + amp * 0.5 : 0.08;
+  arcLvl += (arcGoal - arcLvl) * E(6);
+  arcMat.opacity = arcLvl;
+  const rate = mode === 'thinking' ? 0.05 : 0.12;
+  for (let i = 0; i < arcs.length; i++) {
+    const a = arcs[i];
+    a.userData.next -= dt;
+    if (a.userData.next <= 0) { arcRegen(a); a.userData.next = rate * (0.5 + Math.random()); }
+  }
+
+  // Energy flow: just one phase uniform, the rest happens on the GPU
+  flowPh = (flowPh + dt * (0.5 + sp * 0.35) * 0.26) % 1;
+  flowU.uPhase.value = flowPh;
+
+  // Satellites: just one angle per satellite
+  for (let i = 0; i < sats.length; i++) {
+    const s = sats[i];
+    s.a = (s.a + s.spd * dt * (0.6 + sp * 0.4)) % TAU;
+    s.u.uA.value = s.a;
+  }
+
+  for (let i = 0; i < rings.length; i++) rings[i].rotation.z += rings[i].userData.spd * dt * sp;
+  core.rotation.y += dt * 0.5 * sp;
+  shell.rotation.x -= dt * 0.7 * sp; shell.rotation.y += dt * 0.9 * sp;
+  tickMesh.rotation.z -= dt * 0.12 * sp;
+  spokes.rotation.z += dt * 0.25 * sp;
+  dust.rotation.y += dt * 0.03 * sp; dust.rotation.x += dt * 0.01 * sp;
+
+  if (!drag) { const k = dt * 60; ry += vy * k; rx += vx * k; const f = Math.pow(0.95, k); vy *= f; vx *= f; }
+  const swayY = Math.sin(T * 0.4) * 0.2, swayX = Math.cos(T * 0.3) * 0.1;
+  group.rotation.x += (rx + swayX - group.rotation.x) * E(6);
+  group.rotation.y += (ry + swayY - group.rotation.y) * E(6);
+
+  renderFrame();
+})(last);
+off(() => cancelAnimationFrame(raf));
+
+// ---------- Voice ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+function speak(text) {
+  if (!('speechSynthesis' in window)) { setMode('idle'); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text.replace(/[*_`#>]/g, ''));
+  u.lang = 'en-US';
+  const v = speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith('en'));
+  if (v) u.voice = v;
+  u.onstart = () => setMode('speaking');
+  u.onend = u.onerror = () => setMode('idle');
+  speechSynthesis.speak(u);
+}
+function listen() {
+  if (!SR) { addLine('jarvis', 'Your browser has no speech recognition. Please type instead.'); return; }
+  if (rec) { rec.stop(); return; }
+  speechSynthesis.cancel();
+  rec = new SR(); rec.lang = 'en-US'; rec.interimResults = false;
+  rec.onstart = () => setMode('listening');
+  rec.onresult = e => { const s = e.results[0][0].transcript; ask(s); };
+  rec.onerror = () => {};
+  rec.onend = () => { rec = null; if (mode === 'listening') setMode('idle'); };
+  rec.start();
+}
+off(() => { try { rec && rec.abort(); } catch (e) {} try { speechSynthesis.cancel(); } catch (e) {} });
+
+// ---------- Brain (Claude) ----------
+const history = [];
+const getKey = () => { try { return localStorage.getItem('jarvis_key') || ''; } catch (e) { return ''; } };
+const sys = () => `You are J.A.R.V.I.S, a dry, polite and helpful AI assistant. Answer briefly in English (1–3 sentences) unless asked otherwise. Now: ${new Date().toLocaleString('en-US')}.`;
+
+async function ask(text) {
+  text = (text || '').trim();
+  if (!text) return;
+  addLine('you', text);
+  const key = getKey();
+  if (!key) { addLine('jarvis', 'I need an API key. Press 🔑.'); return; }
+  history.push({ role: 'user', content: text });
+  setMode('thinking');
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 600, system: sys(), messages: history.slice(-20) })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error((d.error && d.error.message) || r.status);
+    const out = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n') || '…';
+    history.push({ role: 'assistant', content: out });
+    addLine('jarvis', out);
+    speak(out);
+  } catch (e) {
+    history.pop();
+    addLine('jarvis', 'Error: ' + e.message);
+    setMode('idle');
+  }
+}
+
+// ---------- Buttons ----------
+const send = () => { const v = inEl.value; inEl.value = ''; ask(v); };
+$('jv-send').onclick = send;
+inEl.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+$('jv-mic').onclick = listen;
+$('jv-key').onclick = () => {
+  const k = prompt('Paste your Anthropic API key (only stored in your browser):', '');
+  if (k !== null) { try { localStorage.setItem('jarvis_key', k.trim()); addLine('jarvis', k.trim() ? 'Key saved.' : 'Key removed.'); } catch (e) {} }
+};
+
+addLine('jarvis', 'Systems online. How may I assist you?');
+
+// ---------- Cleanup ----------
+off(() => {
+  scene.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+  });
+  [brightMat, blurMat, compMat].forEach(m => m.dispose());
+  quad.geometry.dispose(); quad.material.dispose();
+  disposeTargets();
+  gtex.dispose();
+  renderer.dispose();
+  cv.remove(); ui.remove();
+});
