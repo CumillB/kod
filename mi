@@ -1,0 +1,12 @@
+cat > ventoy.json << 'EOF'
+{
+  "persistence": [
+    {
+      "image": "/linuxmint-22.3-cinnamon-64bit-hwe-6.17(1).iso",
+      "backend": "/mint_persistence.dat",
+      "autosel": 1
+    }
+  ]
+}
+EOF
+sync
