@@ -1,0 +1,2 @@
+el.innerHTML = '<h1 style="color:white;padding:10px">Det funkar</h1>';
+console.log('ok');
